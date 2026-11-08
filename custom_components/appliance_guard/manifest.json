@@ -1,0 +1,14 @@
+{
+  "domain": "appliance_guard",
+  "name": "Appliance Guard",
+  "after_dependencies": ["mobile_app", "notify"],
+  "codeowners": ["@ulfben"],
+  "config_flow": true,
+  "dependencies": ["recorder", "repairs"],
+  "documentation": "https://github.com/ulfben/ha-appliance-guard",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/ulfben/ha-appliance-guard/issues",
+  "requirements": [],
+  "version": "2026.11.0"
+}

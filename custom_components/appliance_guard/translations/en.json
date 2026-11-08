@@ -1,0 +1,185 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Watch your plugs",
+        "description": "Look through your smart plugs and suggest which to watch, or pick any power sensor yourself.",
+        "menu_options": {
+          "plugs": "Choose from the plugs found",
+          "manual": "Pick a power sensor by hand"
+        }
+      },
+      "pick": {
+        "title": "Which plugs should be watched?",
+        "description": "Each line sums up the last 10 days. Ticked: appliances that cycle like a compressor (fridge, freezer, dehumidifier), names like a fridge, and plugs that have drawn close to their rating. Short start spikes, like a compressor starting, don't count. Settings are guessed per plug; check them later under Configure, especially the plug rating.",
+        "data": {
+          "plugs": "Plugs",
+          "notify_targets": "Phones to notify"
+        },
+        "data_description": {
+          "notify_targets": "Used for every plug picked here. Without any, findings only show under Settings > Repairs."
+        }
+      },
+      "manual": {
+        "title": "Pick a power sensor",
+        "description": "Any power sensor, for example a plug the guard didn't recognise. Its history is used to learn what is normal, so watching starts right away.",
+        "data": {
+          "power_entity": "Power sensor"
+        }
+      },
+      "details": {
+        "title": "About this appliance",
+        "description": "Filled in from the plug and its history (suggested type: {profile}). Check the plug rating against the plug itself.",
+        "data": {
+          "name": "Name",
+          "profile": "Type of appliance",
+          "rating_w": "Plug rating",
+          "critical": "Critical: alarm if it stops (fridge, freezer)",
+          "relay_entity": "Plug relay switch",
+          "notify_targets": "Phones to notify"
+        },
+        "data_description": {
+          "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
+          "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
+          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This power sensor is already watched."
+    },
+    "progress": {
+      "scan": "Scanning your smart plugs and reading 10 days of history for each. This can take a minute."
+    },
+    "create_entry": {
+      "picked": "Watching {count} plugs: {names}. Each has its own entry under Appliance Guard; check its settings under Configure."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "About this appliance",
+        "data": {
+          "name": "Name",
+          "profile": "Type of appliance",
+          "rating_w": "Plug rating",
+          "critical": "Critical: alarm if it stops (fridge, freezer)",
+          "relay_entity": "Plug relay switch",
+          "notify_targets": "Phones to notify"
+        },
+        "data_description": {
+          "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
+          "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
+          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs."
+        }
+      }
+    }
+  },
+  "selector": {
+    "profile": {
+      "options": {
+        "cycling": "Cycling: starts and stops by itself (fridge, freezer, dehumidifier)",
+        "always_on": "Always on: steady draw (network, servers)",
+        "on_demand": "On demand: runs when someone starts it (kettle, washer, heater)"
+      }
+    }
+  },
+  "issues": {
+    "finding": {
+      "title": "{name}: {check}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "{name}: {check}",
+            "description": "{summary}\n\nWhat's going on?",
+            "menu_options": {
+              "off_on_purpose": "It's off on purpose (watching resumes when it runs again)",
+              "something_new": "Something new is plugged in (relearn)",
+              "new_normal": "This is the new normal (relearn)",
+              "one_off": "One-off, it's fine",
+              "will_check": "I'll check it",
+              "snooze_1h": "Snooze 1 hour",
+              "snooze_24h": "Snooze 24 hours",
+              "cut_power": "Cut power (switch the plug off)",
+              "turn_back_on": "Turn the plug back on"
+            }
+          }
+        },
+        "abort": {
+          "gone": "This finding has already been answered or has expired."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "OK",
+          "learning": "Learning",
+          "notice": "Notice",
+          "alarm": "Alarm",
+          "off_on_purpose": "Off on purpose",
+          "paused": "Paused",
+          "disabled": "Disabled"
+        }
+      },
+      "running_power": {
+        "name": "Normal running power"
+      },
+      "between_runs_power": {
+        "name": "Normal power between runs"
+      },
+      "longest_run": {
+        "name": "Longest normal run"
+      },
+      "longest_pause": {
+        "name": "Longest normal pause"
+      },
+      "after_dropout": {
+        "name": "After a dropout",
+        "state": {
+          "not_seen": "Not seen yet",
+          "came_back_on": "Came back on",
+          "came_back_off": "Came back off"
+        }
+      }
+    },
+    "binary_sensor": {
+      "problem": {
+        "name": "Problem"
+      }
+    },
+    "event": {
+      "finding": {
+        "name": "Finding",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "notice": "Notice",
+              "alarm": "Alarm",
+              "response": "Answered"
+            }
+          }
+        }
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "watching": "Watching",
+          "off_on_purpose": "Off on purpose",
+          "paused": "Paused",
+          "disabled": "Disabled"
+        }
+      }
+    },
+    "button": {
+      "relearn": {
+        "name": "Relearn"
+      }
+    }
+  }
+}

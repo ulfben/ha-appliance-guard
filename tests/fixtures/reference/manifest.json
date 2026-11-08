@@ -1,0 +1,78 @@
+{
+ "exported_at": 1794062008.3259125,
+ "timezone": "Europe/Stockholm",
+ "raw": {
+  "bsmnt_fridge": {
+   "platform": "zha",
+   "rows": 6018,
+   "first": 1793158405.9163167,
+   "last": 1794061071.2596285
+  },
+  "lg_fridge": {
+   "platform": "zha",
+   "rows": 14920,
+   "first": 1793157161.0349913,
+   "last": 1794061996.4364738
+  },
+  "lg_freezer": {
+   "platform": "zha",
+   "rows": 47821,
+   "first": 1793159482.9874012,
+   "last": 1794061988.006193
+  },
+  "dehumidifier": {
+   "platform": "zha",
+   "rows": 1532,
+   "first": 1793182776.2450294,
+   "last": 1794061711.2902
+  },
+  "servers_printer": {
+   "platform": "zha",
+   "rows": 140561,
+   "first": 1793157121.5838737,
+   "last": 1794061984.9707203
+  },
+  "network": {
+   "platform": "zha",
+   "rows": 101804,
+   "first": 1793157123.584261,
+   "last": 1794062007.6829753
+  },
+  "bsmnt_fridge_switch": {
+   "platform": "zha",
+   "rows": 43,
+   "first": 1793182776.2508357,
+   "last": 1794047062.45271
+  },
+  "lg_fridge_switch": {
+   "platform": "zha",
+   "rows": 40,
+   "first": 1793182776.2442663,
+   "last": 1794042777.7836318
+  },
+  "lg_freezer_switch": {
+   "platform": "zha",
+   "rows": 43,
+   "first": 1793182776.2406514,
+   "last": 1794043726.8108842
+  },
+  "dehumidifier_switch": {
+   "platform": "zha",
+   "rows": 43,
+   "first": 1793182776.2450826,
+   "last": 1794051756.9403086
+  },
+  "servers_printer_switch": {
+   "platform": "zha",
+   "rows": 42,
+   "first": 1793182776.242423,
+   "last": 1794042777.8050737
+  },
+  "kitchen_island_switch": {
+   "platform": "shelly",
+   "rows": 112,
+   "first": 1793182747.2583516,
+   "last": 1794042749.61302
+  }
+ }
+}
