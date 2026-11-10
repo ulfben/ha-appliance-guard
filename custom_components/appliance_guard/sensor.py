@@ -26,23 +26,30 @@ STATUSES = ["ok", "learning", "notice", "alarm", "off_on_purpose", "paused", "di
 
 @dataclass(frozen=True, kw_only=True)
 class LearnedDescription(SensorEntityDescription):
-    value: Callable[[Model], float]
+    value: Callable[[Watcher], float | None]
 
 
 LEARNED = [
     LearnedDescription(key="running_power", device_class=SensorDeviceClass.POWER,
                        native_unit_of_measurement=UnitOfPower.WATT,
-                       value=lambda m: round(m.run_w, 1)),
+                       value=lambda w: _m(w, lambda m: round(m.run_w, 1))),
     LearnedDescription(key="between_runs_power", device_class=SensorDeviceClass.POWER,
                        native_unit_of_measurement=UnitOfPower.WATT,
-                       value=lambda m: round(m.pause_level_p90, 1)),
+                       value=lambda w: _m(w, lambda m: round(m.pause_level_p90, 1))),
     LearnedDescription(key="longest_run", device_class=SensorDeviceClass.DURATION,
                        native_unit_of_measurement=UnitOfTime.MINUTES,
-                       value=lambda m: round(m.max_run_s / 60)),
+                       value=lambda w: _m(w, lambda m: round(m.max_run_s / 60))),
     LearnedDescription(key="longest_pause", device_class=SensorDeviceClass.DURATION,
                        native_unit_of_measurement=UnitOfTime.MINUTES,
-                       value=lambda m: round(m.max_pause_s / 60)),
+                       value=lambda w: _m(w, lambda m: round(m.max_pause_s / 60))),
+    LearnedDescription(key="normal_minimum_power", device_class=SensorDeviceClass.POWER,
+                       native_unit_of_measurement=UnitOfPower.WATT,
+                       value=lambda w: round(w.floor_w, 1) if w.floor_w is not None else None),
 ]
+
+
+def _m(w: Watcher, f: Callable[[Model], float]) -> float | None:
+    return f(w.model) if w.model is not None else None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: GuardConfigEntry,
@@ -88,12 +95,11 @@ class LearnedSensor(GuardEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.watcher.model is not None
+        return self.native_value is not None
 
     @property
     def native_value(self) -> float | None:
-        m = self.watcher.model
-        return self.entity_description.value(m) if m else None
+        return self.entity_description.value(self.watcher)
 
 
 class AfterDropoutSensor(GuardEntity, SensorEntity):

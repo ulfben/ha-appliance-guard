@@ -34,7 +34,8 @@
           "name": "Name",
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
-          "critical": "Critical: must keep starting (fridge, freezer)",
+          "critical": "Critical: must keep running (fridge, freezer, network)",
+          "keep_on": "Keep powered",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
         },
@@ -42,7 +43,8 @@
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
-          "critical": "A long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan."
+          "critical": "Cycling: a long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     },
@@ -64,7 +66,8 @@
           "name": "Name",
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
-          "critical": "Critical: must keep starting (fridge, freezer)",
+          "critical": "Critical: must keep running (fridge, freezer, network)",
+          "keep_on": "Keep powered",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
         },
@@ -72,7 +75,8 @@
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
-          "critical": "A long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan."
+          "critical": "Cycling: a long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     }
@@ -146,6 +150,9 @@
           "came_back_on": "Came back on",
           "came_back_off": "Came back off"
         }
+      },
+      "normal_minimum_power": {
+        "name": "Normal minimum power"
       }
     },
     "binary_sensor": {

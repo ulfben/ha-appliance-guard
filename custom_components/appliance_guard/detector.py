@@ -2,8 +2,9 @@
 
 Implemented (DESIGN.md section 6): A1 plug rating, A2 relay off by itself,
 A3 failed starts, A5 back off after a dropout, N1 long run, N2 dead device,
-N4 elevated draw between runs.
-A4, N3, S1, S2 and the household checks come later. Pure Python, no Home Assistant
+N4 elevated draw between runs, N5 a critical always-on plug switched off from HA,
+S2 an always-on load stopped drawing.
+A4, N3, S1, the upper half of S2 and the household checks come later. Pure Python, no Home Assistant
 imports.
 """
 
@@ -82,12 +83,16 @@ class Limits:
     n4_cooldown_s: float = 6 * 3600.0
     # Plugs and HA take a while to settle after a power cut, and "off" is rarely urgent.
     a5_grace_s: float = 300.0
+    # S2: below this share of the learned floor for this long, with the relay on.
+    s2_frac: float = 0.5
+    s2_hold_s: float = 300.0
 
 
 class DeviceDetector:
     def __init__(self, cfg: DeviceConfig, model: Model | None = None,
-                 limits: Limits | None = None) -> None:
+                 limits: Limits | None = None, floor_w: float | None = None) -> None:
         self.cfg = cfg
+        self.floor_w = floor_w  # always-on: the least it normally draws
         self.model = model
         self.lim = limits or Limits()
         self.dropped = 0
@@ -113,6 +118,10 @@ class DeviceDetector:
         # N4
         self._n4_since: float | None = None
         self._n4_last: float | None = None
+        # S2
+        self._s2_since: float | None = None
+        self._s2_fired = False
+        self._last_w: tuple[float, float | None] | None = None  # (ts, watts)
 
     # ---- inputs -------------------------------------------------------------
 
@@ -123,6 +132,7 @@ class DeviceDetector:
         out: list[Finding] = []
         if watts is not None:
             out += self._a1(ts, watts)
+        self._s2_track(ts, watts)
         if self.seg is not None and self.cfg.profile == Profile.CYCLING:
             for closed in self.seg.feed(ts, watts):
                 out += self._on_closed(closed)
@@ -153,6 +163,11 @@ class DeviceDetector:
                                    f"{self.cfg.name}: the plug switched itself off "
                                    "(overload protection, its button, or a power cut)",
                                    {"offer": ["turn_back_on", "off_on_purpose"]}))
+            elif (was is True and commanded and self.cfg.critical
+                  and self.cfg.profile == Profile.ALWAYS_ON):
+                out.append(Finding("N5", Severity.NOTICE, ts,
+                                   f"{self.cfg.name} was switched off from Home Assistant",
+                                   {"offer": ["turn_back_on", "off_on_purpose"]}))
             elif back is not None and not commanded:
                 self._a5_pending = back
         else:
@@ -169,6 +184,13 @@ class DeviceDetector:
                 self.dropouts.append(back)
         self._relay_known = on
         self._gap_since, self._gap_ha = None, False
+        if on != was:
+            # S2 counts from when the relay is on: a load that was off isn't "stopped".
+            # The plug may only report changes, so the last reading still counts.
+            self._s2_since = None
+            last = self._last_w
+            if on and last is not None and last[1] is not None and self._s2_low(last[1]):
+                self._s2_since = max(ts, last[0])
         return out
 
     def feed_ha_down(self, ts: float) -> None:
@@ -178,7 +200,7 @@ class DeviceDetector:
         self.relay_on = None
 
     def tick(self, now: float) -> list[Finding]:
-        out = self._a1_sustained(now) + self._a5(now)
+        out = self._a1_sustained(now) + self._a5(now) + self._s2(now)
         if self.seg is None or self.cfg.profile != Profile.CYCLING:
             return out
         out += self._a3_unrecovered(now)
@@ -241,6 +263,45 @@ class DeviceDetector:
         return [Finding("A1", Severity.ALARM, now,
                         f"{self.cfg.name}: above 90% of the plug's {r:.0f} W rating "
                         f"for {now - since:.0f} s", {"offer": ["cut_power", "will_check"]})]
+
+    # ---- S2 always-on load stopped drawing ------------------------------------------
+
+    def rearm_s2(self) -> None:
+        """Forget an S2 raised while replaying history, so a load still stopped is reported."""
+        self._s2_fired = False
+
+    def _s2_limit(self) -> float | None:
+        if self.floor_w is None or self.cfg.profile != Profile.ALWAYS_ON:
+            return None
+        return self.floor_w * self.lim.s2_frac
+
+    def _s2_low(self, watts: float) -> bool:
+        limit = self._s2_limit()
+        return limit is not None and watts < limit
+
+    def _s2_track(self, ts: float, watts: float | None) -> None:
+        self._last_w = (ts, watts)
+        limit = self._s2_limit()
+        if limit is None or watts is None or watts >= limit:
+            # Unknown is the plug out of contact, not the load stopping.
+            self._s2_since = None
+            if watts is not None and limit is not None and watts >= limit:
+                self._s2_fired = False
+            return
+        self._s2_since = self._s2_since or ts
+
+    def _s2(self, now: float) -> list[Finding]:
+        since = self._s2_since
+        if (since is None or self._s2_fired or self.relay_on is False
+                or now - since < self.lim.s2_hold_s):
+            return []
+        self._s2_fired = True
+        sev = Severity.ALARM if self.cfg.critical else Severity.NOTICE
+        return [Finding("S2", sev, now,
+                        f"{self.cfg.name}: stopped drawing power {(now - since) / 60:.0f} min ago "
+                        f"(normally at least {self.floor_w:.0f} W)"
+                        + (" although its plug is on" if self.relay_on else ""),
+                        {"floor_w": self.floor_w, "offer": ["will_check", "off_on_purpose"]})]
 
     # ---- A5 came back off after a dropout --------------------------------------
 

@@ -24,6 +24,7 @@ from homeassistant.util import slugify
 
 from .const import (
     CONF_CRITICAL,
+    CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
     CONF_POWER_ENTITY,
@@ -126,6 +127,7 @@ def details_schema(hass: HomeAssistant, d: dict[str, Any]) -> vol.Schema:
                                           unit_of_measurement=UnitOfPower.WATT,
                                           mode=selector.NumberSelectorMode.BOX)),
         vol.Required(CONF_CRITICAL, default=bool(d.get(CONF_CRITICAL))): bool,
+        vol.Required(CONF_KEEP_ON, default=bool(d.get(CONF_KEEP_ON))): bool,
         vol.Optional(CONF_RELAY_ENTITY, **relay): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")),
         vol.Optional(CONF_NOTIFY, default=d.get(CONF_NOTIFY) or []): _notify_selector(hass),

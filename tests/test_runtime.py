@@ -21,6 +21,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.appliance_guard.const import (
     CONF_CRITICAL,
+    CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
     CONF_POWER_ENTITY,
@@ -376,3 +377,91 @@ async def test_phones_are_offered_by_their_app_name(hass: HomeAssistant):
         hass.services.async_register("notify", svc, lambda call: None)
     assert phone_names(hass) == {"mobile_app_pixel_7": "Kitchen phone",
                                  "mobile_app_old_phone": "old_phone"}
+
+
+# ---- keep powered ------------------------------------------------------------------
+
+@pytest.fixture
+async def keep_on(hass: HomeAssistant):
+    hass.states.async_set(POWER, "70", {"device_class": "power", "unit_of_measurement": "W"})
+    hass.states.async_set(RELAY, "on")
+    async_mock_service(hass, "notify", "mobile_app_phone")
+    entry = MockConfigEntry(domain=DOMAIN, title="Kettle", data={CONF_POWER_ENTITY: POWER},
+                            options={**OPTIONS, CONF_KEEP_ON: True}, unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    return entry
+
+
+async def test_keep_powered_turns_a_tripped_plug_back_on(hass: HomeAssistant, keep_on, freezer):
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set(RELAY, "off", context=Context())  # switched itself off
+    await hass.async_block_till_done()
+    issues = _issues(hass)
+    assert len(issues) == 1 and issues[0].severity == ir.IssueSeverity.WARNING
+    assert issues[0].translation_placeholders["summary"].endswith("Turning it back on.")
+    assert turn_on == []  # waits a moment for an overload reading that raced the relay
+
+    await _tick_later(hass, freezer, 11)
+    assert len(turn_on) == 1 and turn_on[0].data["entity_id"] == RELAY
+    hass.states.async_set(RELAY, "on", context=turn_on[0].context)
+    await _tick_later(hass, freezer, 61)
+    assert len(_issues(hass)) == 1  # no alarm on top
+
+
+async def test_keep_powered_not_after_an_overload(hass: HomeAssistant, keep_on, freezer):
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set(POWER, "3302")
+    hass.states.async_set(RELAY, "off", context=Context())
+    await hass.async_block_till_done()
+    await _tick_later(hass, freezer, 11)
+    assert turn_on == []
+    summaries = [i.translation_placeholders["summary"] for i in _issues(hass)
+                 if i.severity == ir.IssueSeverity.ERROR]
+    assert any("Not turned back on: it was just over its rating" in s for s in summaries), [
+        (i.severity, i.translation_placeholders["summary"]) for i in _issues(hass)]
+
+
+async def test_keep_powered_gives_up_and_alarms(hass: HomeAssistant, keep_on, freezer):
+    turn_on = async_mock_service(hass, "switch", "turn_on")  # the relay never follows
+    hass.states.async_set(RELAY, "off", context=Context())
+    await hass.async_block_till_done()
+    await _tick_later(hass, freezer, 11)
+    for _ in range(4):
+        await _tick_later(hass, freezer, 61)
+    assert len(turn_on) == 3
+    alarms = [i for i in _issues(hass) if i.severity == ir.IssueSeverity.ERROR]
+    assert len(alarms) == 1
+    assert "did not come back on after 3 tries" in alarms[0].translation_placeholders["summary"]
+
+
+async def test_keep_powered_respects_off_on_purpose(hass: HomeAssistant, keep_on, freezer):
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    keep_on.runtime_data.set_mode(MODE_OFF_ON_PURPOSE)
+    hass.states.async_set(RELAY, "off", context=Context())
+    await _tick_later(hass, freezer, 120)
+    assert turn_on == []
+
+
+async def test_always_on_learns_its_minimum_power(hass: HomeAssistant, monkeypatch):
+    from replay import raw
+
+    from custom_components.appliance_guard import watcher as watcher_module
+
+    readings = raw("network")
+
+    async def fake_load(_hass, _entity, _days):
+        return readings
+
+    monkeypatch.setattr(watcher_module, "async_load_readings", fake_load)
+    hass.states.async_set(POWER, "72", {"device_class": "power", "unit_of_measurement": "W"})
+    entry = MockConfigEntry(domain=DOMAIN, title="Network", data={CONF_POWER_ENTITY: POWER},
+                            options={CONF_NAME: "Network", CONF_PROFILE: "always_on",
+                                     CONF_CRITICAL: True}, unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert 65 <= float(hass.states.get("sensor.network_guard_normal_minimum_power").state) <= 72
+    assert hass.states.get("sensor.network_guard_status").state == "ok"
+    assert _issues(hass) == []

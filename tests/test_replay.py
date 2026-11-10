@@ -11,7 +11,7 @@ from custom_components.appliance_guard.detector import (
     Profile,
     Severity,
 )
-from custom_components.appliance_guard.model import learn_cycling
+from custom_components.appliance_guard.model import NoSteadyDrawError, learn_cycling, learn_floor
 
 FRIDGE = DeviceConfig("Basement fridge", Profile.CYCLING, rating_w=3680, critical=True)
 
@@ -335,3 +335,109 @@ def test_a5_relay_still_on_after_an_ha_restart_records_nothing():
 def test_r9_printer_warmups_raise_nothing():
     det = DeviceDetector(DeviceConfig("Servers", Profile.ALWAYS_ON, rating_w=2300))
     assert run(det, raw("servers_printer")) == []
+
+
+# ---- always-on: S2 stopped drawing, N5 switched off from HA -------------------
+
+NETWORK = DeviceConfig("Network", Profile.ALWAYS_ON, rating_w=3680, critical=True)
+
+
+def test_always_on_floor_is_learned_from_real_history():
+    assert 65 <= learn_floor(raw("network")) <= 72
+    # The printer's warm-ups and a reboot's 0 W blip don't move the servers' floor.
+    assert 40 <= learn_floor(raw("servers_printer")) <= 55
+
+
+def test_always_on_floor_needs_a_steady_draw():
+    with pytest.raises(NoSteadyDrawError):
+        learn_floor([(t * 60.0, 0.0) for t in range(3000)])
+    with pytest.raises(NoSteadyDrawError):
+        learn_floor([(t * 60.0, 70.0) for t in range(100)])  # under a day
+
+
+@pytest.mark.parametrize("alias", ["network", "servers_printer"])
+def test_s2_real_always_on_history_raises_nothing(alias):
+    readings = raw(alias)
+    cfg = DeviceConfig(alias, Profile.ALWAYS_ON, rating_w=2300, critical=True)
+    det = DeviceDetector(cfg, floor_w=learn_floor(readings))
+    assert [f for f in run(det, readings) if f.check == "S2"] == []
+
+
+def _network(**kw):
+    return DeviceDetector(kw.pop("cfg", NETWORK), floor_w=70.0)
+
+
+def test_s2_load_that_stops_drawing_alarms_once_after_5_min():
+    det = _network()
+    det.feed_relay(0, True, commanded=True)
+    det.feed(10, 72.0)
+    det.feed(100, 0.0)  # the power supply died; the relay is still on
+    assert det.tick(390) == []
+    found = det.tick(410)
+    assert [(f.check, f.severity) for f in found] == [("S2", Severity.ALARM)]
+    assert "although its plug is on" in found[0].summary
+    assert det.tick(2000) == []
+    det.feed(2100, 71.0)  # back: the next stop is news again
+    det.feed(2200, 0.0)
+    assert [f.check for f in det.tick(2600)] == ["S2"]
+
+
+def test_s2_non_critical_is_a_notice():
+    det = _network(cfg=DeviceConfig("Servers", Profile.ALWAYS_ON))
+    det.feed(0, 0.0)
+    assert [(f.check, f.severity) for f in det.tick(400)] == [("S2", Severity.NOTICE)]
+
+
+def test_s2_relay_off_or_plug_out_of_contact_is_not_a_stop():
+    det = _network()
+    det.feed_relay(0, True, commanded=True)
+    det.feed(10, 72.0)
+    det.feed_relay(100, False, commanded=True)
+    det.feed(101, 0.0)
+    assert det.tick(1000) == []
+    det.feed_relay(1100, True, commanded=True)
+    det.feed(1101, None)  # the plug dropped out
+    assert det.tick(2000) == []
+
+
+def test_s2_turned_back_on_but_still_dead_counts_from_the_relay():
+    det = _network()
+    det.feed_relay(0, True, commanded=True)
+    det.feed(10, 0.0)
+    det.feed_relay(20, False, commanded=False)
+    det.feed_relay(1000, True, commanded=True)  # no new power reading follows
+    assert [f.check for f in det.tick(1200)] == []
+    assert [f.check for f in det.tick(1310)] == ["S2"]
+
+
+def test_s2_only_for_always_on():
+    det = DeviceDetector(DeviceConfig("Kettle", Profile.ON_DEMAND), floor_w=70.0)
+    det.feed(0, 0.0)
+    assert det.tick(1000) == []
+
+
+def test_n5_critical_always_on_switched_off_from_ha_is_a_notice():
+    det = _network()
+    det.feed_relay(0, True, commanded=True)
+    found = det.feed_relay(100, False, commanded=True)
+    assert [(f.check, f.severity) for f in found] == [("N5", Severity.NOTICE)]
+    det.feed_relay(200, True, commanded=True)
+    assert [f.check for f in det.feed_relay(300, False, commanded=False)] == ["A2"]
+
+
+@pytest.mark.parametrize("cfg", [DeviceConfig("Servers", Profile.ALWAYS_ON),
+                                 DeviceConfig("Fridge", Profile.CYCLING, critical=True)])
+def test_n5_not_for_other_plugs(cfg):
+    det = DeviceDetector(cfg)
+    det.feed_relay(0, True, commanded=True)
+    assert det.feed_relay(100, False, commanded=True) == []
+
+
+def test_s2_a_relay_on_for_days_counts_from_the_last_reading():
+    det = _network()
+    det.feed_relay(0, True, commanded=True)
+    det.feed(5000, 0.0)
+    det.feed_relay(9000, True, commanded=True)  # e.g. seeded again after a restart
+    found = det.tick(9000)
+    assert [f.check for f in found] == ["S2"]
+    assert "stopped drawing power 67 min ago" in found[0].summary

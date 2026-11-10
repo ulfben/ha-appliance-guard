@@ -83,11 +83,18 @@ and its history. Then open **Configure** on each one and check:
   amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W.
 - **Type of appliance:** *cycling* (fridge, freezer, dehumidifier),
   *always on* (network gear, servers) or *on demand* (everything used now
-  and then). The extra checks below are for cycling appliances only.
-- **Critical:** for a fridge or freezer. A long pause becomes an alarm.
-  Leave it off for appliances that only run when needed, such as a
-  dehumidifier: then a long pause is fine as long as the appliance shows
-  signs of life, like its fan sampling the air.
+  and then). Cycling and always-on appliances get extra checks, below.
+- **Critical:** for a fridge, freezer or the network. For a cycling
+  appliance, a long pause becomes an alarm. Leave it off for appliances that
+  only run when needed, such as a dehumidifier: then a long pause is fine as
+  long as the appliance shows signs of life, like its fan sampling the air.
+  For an always-on appliance, stopping is an alarm, and switching it off
+  from Home Assistant gives a notice.
+- **Keep powered:** turns the plug back on by itself when it switches itself
+  off or comes back off after a power cut, and tells you. It never does so
+  right after the plug was over its rating, and gives up after 3 tries in an
+  hour. Worth it for network gear: while the network is down, the alarm
+  can't reach your phone anyway.
 - **Relay switch** and **Phones to notify**.
 
 To watch a sensor that isn't on a smart plug, choose **Pick a power sensor
@@ -121,6 +128,13 @@ learned about this appliance's runs and pauses:
 | **Running far longer than normal** | A run much longer than any it has learned |
 | **Drawing more than usual between runs** | A higher draw than usual between runs for 15 minutes: a door ajar, or a light left on |
 
+**For always-on appliances** (network gear, servers):
+
+| Alert | When |
+|---|---|
+| **Stopped drawing power** | Under half its normal minimum for 5 minutes while the plug is on: a dead power supply, or a device that shut down. An alarm if critical, otherwise a notice |
+| **Switched off from Home Assistant** | Critical ones only: a notice, in case it was a mistaken tap or an automation. Set **Off on purpose** first to switch it off quietly |
+
 The first four (rating, switched off, came back off, failed starts) are
 safety alarms. They come through even while the plug is paused or an alert
 is snoozed.
@@ -133,7 +147,7 @@ alert:
 
 | Answer | What happens |
 |---|---|
-| It's off on purpose | No "not starting" or "came back off" alerts until the appliance runs again |
+| It's off on purpose | No "not starting", "stopped drawing" or "came back off" alerts until the appliance runs again |
 | Something new is plugged in / This is the new normal | Learns again from history |
 | One-off, it's fine / I'll check it | Closes the alert |
 | Snooze 1 hour / 24 hours | No notices for this plug for that long |
@@ -152,12 +166,11 @@ Each watched plug gets a device, "*name* guard", with:
 | Mode | **Watching**; **Off on purpose**; **Paused** (only safety alarms come through); **Disabled**. Set it ahead of time: "the basement fridge goes off tomorrow" |
 | Relearn | Learns again from the last 10 days |
 | Normal running power, Normal power between runs, Longest normal run, Longest normal pause | What it learned (cycling appliances) |
+| Normal minimum power | What it learned (always-on appliances) |
 | After a dropout | What the plug did after losing contact: `not_seen`, `came_back_on` or `came_back_off`. "Came back off" sticks once seen |
 
 ## Limitations
 
-- An always-on load that stops drawing while its relay stays on (a dead
-  power supply) isn't detected yet.
 - It watches each plug on its own. Several plugs on one power strip, or one
   fuse, aren't added up.
 - A heater stuck on at its normal power looks normal. Only cycling

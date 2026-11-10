@@ -303,8 +303,38 @@ p99 for 2 hours. A notice.
 devices: 30 min; others: 6 h), outside the restart grace. A notice: "can't see
 the basement fridge".
 
-**S2 Always-on out of band** (`always_on`). Below the learned band minus a
-margin for 10 min or more, or above its maximum plus a margin. A notice.
+**S2 Always-on stopped drawing** (`always_on`). As built: the floor is the
+time-weighted 5th percentile of 10 days of readings (Network ~70 W, Servers
+~44–48 W, fiber converter 3 W), so a reboot's few seconds at 0 W and the
+printer's warm-ups don't move it. Below half the floor for 5 min while the
+relay isn't off raises an alarm for critical plugs and a notice for others,
+once until the draw comes back.
+- Unknown readings stop the clock: a plug out of contact is S1, not a stop.
+- The clock starts again when the relay turns on, from the last reading, so a
+  load turned back on that stays dead is caught even if the plug only reports
+  changes.
+- A floor under 2 W, or under a day of history, leaves S2 off with a note on
+  the status sensor.
+- A stop that started before HA restarted is reported at startup.
+- Above the band (the planned upper half of S2) is not built: the printer on
+  the Servers plug (R9) would make it noisy.
+
+**N5 Switched off from Home Assistant** (`always_on`, critical only). The
+relay goes from `on` to `off` through an HA service call. A notice offering
+**Turn back on**, because a mistaken dashboard tap or an automation bug can
+take the internet down. Quiet while the plug is *off on purpose*, so marking
+it first (or using **Cut power**) switches it off silently.
+
+**Keep powered** (option). After A2 or A5 the guard waits 10 s, for an
+overload reading that may have raced the relay, then turns the relay back on
+and checks after 60 s, trying again if it didn't take.
+- It never does so within 10 min of an A1, since the plug may have tripped on
+  purpose, and gives up after 3 tries in an hour.
+- It only acts in mode *Watching*.
+- The finding becomes a notice ("Turning it back on."). If it gives up, an
+  alarm follows that says why.
+- Meant for network gear, whose alarm can't reach a phone while the network is
+  down.
 
 ### Household checks (across all plugs)
 
@@ -328,7 +358,7 @@ changes the model, and most lapse by themselves.
 
 | Response | Offered on | What the guard does | Lapses |
 |---|---|---|---|
-| **Off on purpose** | N2, S1, H1, A2, A5 | Mode `off_on_purpose`: the dead-device and blind checks stop. Power, rating, relay and stall checks keep running | When the device runs normally again (5 starts for `cycling`, 10 min in band for `always_on`) |
+| **Off on purpose** | N2, N5, S1, S2, H1, A2, A5 | Mode `off_on_purpose`: the dead-device and blind checks stop. Power, rating, relay and stall checks keep running | When the device runs normally again (5 starts for `cycling`, 10 min in band for `always_on`) |
 | **Another load shares this plug** | N4, A4, S2 | Links the suggested entity (or one picked by the user) as a shared load and learns its draw | Permanent |
 | **Something new is plugged in** | A4, N1, N3, S2 | Discards the learned model and goes to `learning`. Asks for the profile again | When learning completes |
 | **New normal** | A4, N1, S2 | Keeps the model but adds the new level as normal: the envelope is widened and a 3-day period gets extra weight | Permanent |
@@ -409,7 +439,7 @@ history for each and offers:
   form with the same guesses filled in.
 
 **Changing settings.** *Configure* on an entry opens the same details form
-(name, type, rating, critical, relay, phones). Saving reloads the entry, which
+(name, type, rating, critical, keep powered, relay, phones). Saving reloads the entry, which
 relearns from history and closes open findings. The power sensor can't be
 changed; remove the entry and add it again. Mode and Relearn are entities on
 the plug's guard device.

@@ -77,6 +77,29 @@ class NotCyclingError(ValueError):
     """The history has no clear idle and running levels."""
 
 
+class NoSteadyDrawError(ValueError):
+    """An always-on load whose history shows no steady draw to watch."""
+
+
+ALWAYS_ON_MIN_W = 2.0  # below this a stop can't be told from a quiet load
+ALWAYS_ON_MIN_KNOWN_S = 86400.0
+
+
+def learn_floor(readings: list[tuple[float, float | None]]) -> float:
+    """The least an always-on load normally draws: its time-weighted 5th percentile.
+
+    Short dips (a reboot, the odd 0 W reading) fall below it and don't count.
+    """
+    pairs = time_weighted(readings)
+    if sum(s for _, s in pairs) < ALWAYS_ON_MIN_KNOWN_S:
+        raise NoSteadyDrawError("less than a day of history")
+    floor = weighted_percentile(pairs, 5)
+    if floor < ALWAYS_ON_MIN_W:
+        raise NoSteadyDrawError(
+            f"draws under {ALWAYS_ON_MIN_W:.0f} W much of the time, so a stop can't be told apart")
+    return floor
+
+
 def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = 20) -> Model:
     pairs = time_weighted(readings)
     if not pairs:

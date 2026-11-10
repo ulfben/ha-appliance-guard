@@ -9,6 +9,7 @@ CONF_PROFILE = "profile"
 CONF_RATING_W = "rating_w"
 CONF_CRITICAL = "critical"
 CONF_NOTIFY = "notify_targets"
+CONF_KEEP_ON = "keep_on"
 
 HISTORY_DAYS = 10
 RELEARN_INTERVAL_H = 24
@@ -18,6 +19,12 @@ COMMAND_WINDOW_S = 10  # a relay change this soon after a matching service call 
 ALARM_REPEAT_S = 15 * 60
 ALARM_REPEATS = 4
 OFF_ON_PURPOSE_RUNS = 5  # normal runs that end "off on purpose" for a cycling device
+# Keep powered: turn the relay back on by itself, at most this often, and never
+# right after it was over its rating (that is the plug protecting itself).
+KEEP_ON_TRIES = 3
+KEEP_ON_WINDOW_S = 3600
+KEEP_ON_AFTER_A1_S = 600
+KEEP_ON_VERIFY_S = 60
 
 EVENT_FINDING = f"{DOMAIN}_finding"
 

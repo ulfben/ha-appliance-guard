@@ -6,6 +6,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -13,7 +14,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_CALL_SERVICE, STATE_OFF, STATE_ON
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 
 from .const import (
@@ -22,6 +27,7 @@ from .const import (
     ALARM_REPEATS,
     COMMAND_WINDOW_S,
     CONF_CRITICAL,
+    CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
     CONF_POWER_ENTITY,
@@ -31,6 +37,10 @@ from .const import (
     DOMAIN,
     EVENT_FINDING,
     HISTORY_DAYS,
+    KEEP_ON_AFTER_A1_S,
+    KEEP_ON_TRIES,
+    KEEP_ON_VERIFY_S,
+    KEEP_ON_WINDOW_S,
     MODE_DISABLED,
     MODE_OFF_ON_PURPOSE,
     MODE_PAUSED,
@@ -51,7 +61,7 @@ from .const import (
 from .detector import DeviceConfig, DeviceDetector, Dropout, Finding, Profile, Severity
 from .episodes import IDLE, RUN
 from .learn import async_load_readings, async_load_relay, to_watts
-from .model import Model, NotCyclingError, learn_cycling
+from .model import Model, NoSteadyDrawError, NotCyclingError, learn_cycling, learn_floor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,9 +73,14 @@ CHECK_TITLES = {
     "N1": "running far longer than normal",
     "N2": "not starting",
     "N4": "drawing more than usual between runs",
+    "N5": "switched off from Home Assistant",
+    "S2": "stopped drawing power",
 }
 # Safety alarms come through even while paused or snoozed.
 SAFETY = {"A1", "A2", "A3", "A5"}
+# Quiet while the appliance is off on purpose.
+OFF_CHECKS = ("N2", "A5", "N5", "S2")
+KEEP_ON_DELAY_S = 10  # lets an overload reading that raced the relay arrive first
 STORE_VERSION = 1
 
 
@@ -85,7 +100,11 @@ class Watcher:
             critical=bool(o.get(CONF_CRITICAL, False)),
         )
         self.notify_targets: list[str] = list(o.get(CONF_NOTIFY) or [])
+        self.keep_on = bool(o.get(CONF_KEEP_ON, False)) and self.relay_entity is not None
+        self._keep_on_tries: deque[float] = deque()
+        self._last_a1: float | None = None
         self.model: Model | None = None
+        self.floor_w: float | None = None
         self.learn_note: str | None = None
         self.learned = False
         self.detector = DeviceDetector(self.cfg)
@@ -142,19 +161,28 @@ class Watcher:
     async def async_relearn(self) -> None:
         """Learn from the recorder, then replay the last hours silently."""
         readings = await async_load_readings(self.hass, self.power_entity, HISTORY_DAYS)
-        model, note = None, None
+        model, note, floor = None, None, None
         if self.cfg.profile == Profile.CYCLING:
             try:
                 model = await self.hass.async_add_executor_job(learn_cycling, readings)
             except NotCyclingError as err:
                 note = str(err)
-        det = DeviceDetector(self.cfg, model)
+        elif self.cfg.profile == Profile.ALWAYS_ON:
+            try:
+                floor = await self.hass.async_add_executor_job(learn_floor, readings)
+            except NoSteadyDrawError as err:
+                note = str(err)
+        det = DeviceDetector(self.cfg, model, floor_w=floor)
         cutoff = time.time() - REPLAY_HOURS * 3600
         for ts, watts in readings:
             if ts >= cutoff:
                 det.feed(ts, watts)  # findings about the past are not reported
+        if not any(f.check == "S2" for f in self.findings.values()):
+            det.rearm_s2()  # still stopped now: that is news
         findings = await self._async_seed_relay(det)
+        findings += det.tick(time.time())
         self.model, self.learn_note, self.detector, self.learned = model, note, det, True
+        self.floor_w = floor
         _LOGGER.debug("%s learned: %s (%s)", self.cfg.name, model, note)
         self._handle(findings)
         self._update()
@@ -261,15 +289,24 @@ class Watcher:
             self.snooze_until is not None and time.time() < self.snooze_until)
         if quiet and not (f.severity == Severity.ALARM and f.check in SAFETY):
             return False
-        return not (self.mode == MODE_OFF_ON_PURPOSE and f.check in ("N2", "A5"))
+        return not (self.mode == MODE_OFF_ON_PURPOSE and f.check in OFF_CHECKS)
 
     @callback
     def _handle(self, findings: list[Finding]) -> None:
         changed = False
         for f in findings:
+            if f.check == "A1":
+                self._last_a1 = f.ts
             if not self._allowed(f):
                 _LOGGER.debug("%s: suppressed %s (%s)", self.cfg.name, f.check, self.mode)
                 continue
+            if self._keeps_on(f):
+                async_call_later(self.hass, KEEP_ON_DELAY_S,
+                                 callback(lambda _now, f=f: self._keep_on_now(f)))
+                f = replace(f, severity=Severity.NOTICE,
+                            summary=f"{f.summary} Turning it back on.",
+                            data={**f.data, "kept_on": True,
+                                  "offer": ["off_on_purpose", "will_check"]})
             fid = f"{f.check}_{int(f.ts)}"
             self.findings[fid] = f
             self.last_finding = f
@@ -296,6 +333,62 @@ class Watcher:
             self._send_phone(fid, f)
         if changed:
             self._update()
+
+    # ---- keep powered ------------------------------------------------------------
+
+    def _keeps_on(self, f: Finding) -> bool:
+        return (self.keep_on and f.check in ("A2", "A5") and self.mode == MODE_WATCHING
+                and "kept_on" not in f.data)
+
+    def _keep_on_refusal(self, now: float) -> str | None:
+        if self._last_a1 is not None and now - self._last_a1 < KEEP_ON_AFTER_A1_S:
+            return "it was just over its rating, so its overload protection may have tripped"
+        while self._keep_on_tries and now - self._keep_on_tries[0] > KEEP_ON_WINDOW_S:
+            self._keep_on_tries.popleft()
+        if len(self._keep_on_tries) >= KEEP_ON_TRIES:
+            return f"it was already turned back on {KEEP_ON_TRIES} times in the last hour"
+        if self.mode != MODE_WATCHING:
+            return "it is no longer being watched"
+        return None
+
+    def _relay_is_on(self) -> bool:
+        st = self.hass.states.get(self.relay_entity) if self.relay_entity else None
+        return st is not None and st.state == STATE_ON
+
+    @callback
+    def _keep_on_now(self, f: Finding) -> None:
+        if self._relay_is_on():
+            return
+        now = time.time()
+        if (why := self._keep_on_refusal(now)) is not None:
+            self._give_up(f, f"Not turned back on: {why}.")
+            return
+        self._keep_on_tries.append(now)
+        self.hass.async_create_task(self._async_keep_on(f))
+
+    async def _async_keep_on(self, f: Finding) -> None:
+        try:
+            await self.hass.services.async_call(
+                "switch", "turn_on", {"entity_id": self.relay_entity}, blocking=True)
+        except Exception:  # noqa: BLE001 - a plug that is still booting can refuse
+            _LOGGER.warning("%s: could not turn the plug back on", self.cfg.name,
+                            exc_info=True)
+        async_call_later(self.hass, KEEP_ON_VERIFY_S,
+                         callback(lambda _now: self._keep_on_check(f)))
+
+    @callback
+    def _keep_on_check(self, f: Finding) -> None:
+        if self._relay_is_on():
+            _LOGGER.info("%s: turned back on", self.cfg.name)
+            return
+        if self._keep_on_refusal(time.time()) is None:
+            self._keep_on_now(f)  # try again
+            return
+        self._give_up(f, f"It did not come back on after {len(self._keep_on_tries)} tries.")
+
+    def _give_up(self, f: Finding, why: str) -> None:
+        self._handle([replace(f, ts=time.time(), summary=f"{f.summary} {why}",
+                              data={**f.data, "kept_on": False})])
 
     def issue_id(self, fid: str) -> str:
         return f"{self.entry.entry_id}_{fid}"
