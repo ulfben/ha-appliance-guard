@@ -6,6 +6,7 @@ envelope from long-term statistics (DESIGN.md section 5) comes later.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 from .episodes import IDLE, RUN, Segment, segment_all
@@ -119,18 +120,26 @@ def segment_level(s: Segment) -> float:
 
 def _held(readings: list[tuple[float, float | None]]) -> float:
     """The highest draw held without a break for HELD_S (start spikes don't count)."""
+    # For each start i, the shortest run of readings i..j lasting HELD_S; the
+    # answer is the best minimum over those runs. j only moves forward as i
+    # does, so a sliding-window minimum keeps this one pass: plugs can have
+    # hundreds of thousands of readings.
     pairs = time_weighted(readings)
-    best = 0.0
+    best, acc, j = 0.0, 0.0, 0
+    mins: deque[int] = deque()  # indexes in i..j-1, their watts increasing
     for i in range(len(pairs)):
-        acc, low = 0.0, INSANE_W
-        for w, secs in pairs[i:]:
-            low = min(low, w)
-            if low <= best:
-                break
-            acc += secs
-            if acc >= HELD_S:
-                best = low
-                break
+        while j < len(pairs) and acc < HELD_S:
+            while mins and pairs[mins[-1]][0] >= pairs[j][0]:
+                mins.pop()
+            mins.append(j)
+            acc += pairs[j][1]
+            j += 1
+        if acc < HELD_S:
+            break
+        best = max(best, pairs[mins[0]][0])
+        acc -= pairs[i][1]
+        if mins[0] == i:
+            mins.popleft()
     return best
 
 
