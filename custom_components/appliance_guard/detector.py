@@ -74,6 +74,9 @@ class Limits:
     n1_elevated_after_s: float = 7200.0
     n2_factor: float = 1.5
     n2_floor_s: float = 1800.0
+    # Above idle by this much counts as a sign of life between runs: a dehumidifier's fan
+    # sampling the air, a display. Non-critical appliances only get N2 when none is seen.
+    n2_life_w: float = 5.0
     n4_margin_w: float = 10.0  # above the learned between-runs level
     n4_hold_s: float = 900.0
     n4_cooldown_s: float = 6 * 3600.0
@@ -359,13 +362,22 @@ class DeviceDetector:
     def _n2(self, now: float, cur: Segment, dur: float) -> list[Finding]:
         m, lim = self.model, self.lim
         limit = max(lim.n2_factor * m.max_pause_s, lim.n2_floor_s)
-        if dur < limit:
+        if self.cfg.critical:
+            # A fridge or freezer must keep starting, whatever the weather.
+            quiet, what = dur, "no start"
+        else:
+            # Demand-driven (a dehumidifier in dry air): a long pause is normal as long as
+            # it shows signs of life. Count only the time since the last one.
+            life = [t for t, w in cur.samples if w >= m.idle_w + lim.n2_life_w]
+            quiet = min(dur, now - life[-1]) if life else dur
+            what = "no start and no sign of life"
+        if quiet < limit:
             return []
         sev = Severity.ALARM if self.cfg.critical else Severity.NOTICE
         if not self._once(cur, sev):
             return []
         return [Finding("N2", sev, now,
-                        f"{self.cfg.name}: no start for {dur / 60:.0f} min "
+                        f"{self.cfg.name}: {what} for {quiet / 60:.0f} min "
                         f"(longest normal pause {m.max_pause_s / 60:.0f} min)",
                         {"pause_start": cur.start, "duration_s": dur,
                          "offer": ["off_on_purpose", "will_check", "turn_back_on"]})]

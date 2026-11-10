@@ -84,8 +84,10 @@ and its history. Then open **Configure** on each one and check:
 - **Type of appliance:** *cycling* (fridge, freezer, dehumidifier),
   *always on* (network gear, servers) or *on demand* (everything used now
   and then). The extra checks below are for cycling appliances only.
-- **Critical:** for a fridge or freezer, makes "not starting" an alarm
-  instead of a notice.
+- **Critical:** for a fridge or freezer. A long pause becomes an alarm.
+  Leave it off for appliances that only run when needed, such as a
+  dehumidifier: then a long pause is fine as long as the appliance shows
+  signs of life, like its fan sampling the air.
 - **Relay switch** and **Phones to notify**.
 
 To watch a sensor that isn't on a smart plug, choose **Pick a power sensor
@@ -115,7 +117,7 @@ learned about this appliance's runs and pauses:
 | Alert | When |
 |---|---|
 | **Failed starts** | Repeated short bursts of high draw that never settle into a normal run: a compressor that can't start |
-| **Not starting** | No start for half again as long as the longest normal pause. An alarm for critical appliances, otherwise a notice |
+| **Not starting** | No start for half again as long as the longest normal pause. For critical appliances, an alarm. For others, a notice, and only if it also shows no sign of life (nothing drawn above idle, such as a fan) for that long |
 | **Running far longer than normal** | A run much longer than any it has learned |
 | **Drawing more than usual between runs** | A higher draw than usual between runs for 15 minutes: a door ajar, or a light left on |
 

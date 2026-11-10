@@ -117,6 +117,45 @@ def test_n2_freezer_that_stops_starting_alarms_within_40_min():
     assert found[0].ts - cut <= 40 * 60 + model.max_run_s
 
 
+# ---- N2 for demand-driven appliances: a dry night is not a dead dehumidifier ---
+
+def _dehumidifier_night():
+    """Model learned from the reference days, and the real night of 2026-11-09.
+
+    The compressor started every ~64 min until 21:03, then the air stayed dry (humidity
+    samples 51-56 %, target 55 %) and it only ran its fan for ~1 min every ~63 min
+    (13-14 W) to sample the air. On 2026-11-09 23:12 this raised a false N2 notice.
+    """
+    model = learn_cycling(raw("dehumidifier"))
+    return model, raw("dehumidifier_dry_night")
+
+
+def test_n2_dry_night_with_fan_samples_is_quiet():
+    model, night = _dehumidifier_night()
+    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING), model)
+    found = [f for f in run(det, night) if f.check == "N2"]
+    assert found == [], _checks(found)
+
+
+def test_n2_dehumidifier_flat_at_idle_still_gets_a_notice():
+    model, night = _dehumidifier_night()
+    cut = at("2026-11-09 21:10")
+    dead = [(ts, w if ts < cut or w is None else min(w, 1.0)) for ts, w in night]
+    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING), model)
+    found = [f for f in run(det, dead) if f.check == "N2"]
+    assert len(found) == 1 and found[0].severity == Severity.NOTICE, _checks(found)
+    assert "no sign of life" in found[0].summary
+    limit = max(1.5 * model.max_pause_s, 1800)
+    assert found[0].ts - cut <= limit + 600
+
+
+def test_n2_critical_appliance_ignores_signs_of_life():
+    model, night = _dehumidifier_night()
+    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING, critical=True), model)
+    found = [f for f in run(det, night) if f.check == "N2"]
+    assert len(found) == 1 and found[0].severity == Severity.ALARM, _checks(found)
+
+
 # ---- R1: dehumidifier stall (synthetic, shaped like the hourly statistics) ---
 
 def _old_dehumidifier(days=2, seed=1):

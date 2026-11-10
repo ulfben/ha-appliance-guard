@@ -271,6 +271,14 @@ pause, 30 min)`, not counting unavailable time.
   basement fridge's 102-min pause is real, while the 128/174/178-min gaps
   were missing data (R10).
 - An **alarm** when the device is marked critical, otherwise a notice.
+- **Not critical: only time without a sign of life counts.** A sign of life is
+  any reading 5 W or more above the learned idle level. Demand-driven appliances
+  pause for as long as they aren't needed: on 2026-11-09 the dehumidifier ran no
+  compressor for 9 h because the air stayed dry (samples 51–56 % against a 55 %
+  target), but ran its fan for about a minute every 63 min to sample the air
+  (13–14 W). The old rule raised a false notice after 129 min. A dead unit stays
+  flat at idle and still gets the notice. Fridges and freezers are critical, so
+  their rule is unchanged: they must keep starting whatever the weather.
 - Answered with "off on purpose" (catches R8).
 
 **N4 Elevated draw between runs** (`cycling`). Between runs, the device draws

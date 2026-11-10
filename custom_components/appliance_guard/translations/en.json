@@ -34,14 +34,15 @@
           "name": "Name",
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
-          "critical": "Critical: alarm if it stops (fridge, freezer)",
+          "critical": "Critical: must keep starting (fridge, freezer)",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
         },
         "data_description": {
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
-          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs."
+          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
+          "critical": "A long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan."
         }
       }
     },
@@ -63,14 +64,15 @@
           "name": "Name",
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
-          "critical": "Critical: alarm if it stops (fridge, freezer)",
+          "critical": "Critical: must keep starting (fridge, freezer)",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
         },
         "data_description": {
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
-          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs."
+          "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
+          "critical": "A long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan."
         }
       }
     }
