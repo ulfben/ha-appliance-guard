@@ -12,7 +12,6 @@ CONF_NOTIFY = "notify_targets"
 CONF_KEEP_ON = "keep_on"
 
 HISTORY_DAYS = 10
-RELEARN_INTERVAL_H = 24
 TICK_S = 60
 REPLAY_HOURS = 12  # history replayed silently at start, so open runs/pauses are known
 COMMAND_WINDOW_S = 10  # a relay change this soon after a matching service call was commanded

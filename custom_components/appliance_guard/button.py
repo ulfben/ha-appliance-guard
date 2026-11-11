@@ -1,4 +1,4 @@
-"""Relearn button: same as answering "something new is plugged in"."""
+"""Relearn button: learn again from the last 10 days, replacing what was kept."""
 
 from __future__ import annotations
 
@@ -17,4 +17,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: GuardConfigEntry,
 
 class RelearnButton(GuardEntity, ButtonEntity):
     async def async_press(self) -> None:
-        await self.watcher.async_relearn()
+        self.watcher.learn_from = None
+        await self.watcher.async_relearn(fresh=True)

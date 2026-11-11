@@ -489,7 +489,8 @@ class DeviceDetector:
                         f"{self.cfg.name}: {what} for {quiet / 60:.0f} min "
                         f"(longest normal pause {m.max_pause_s / 60:.0f} min)",
                         {"pause_start": cur.start, "duration_s": dur,
-                         "offer": ["off_on_purpose", "will_check", "turn_back_on"]})]
+                         "offer": ["off_on_purpose", "will_check", "turn_back_on",
+                                   "something_new"]})]
 
 
 def _same_episode(cur: Segment, r: Reported) -> bool:

@@ -554,3 +554,62 @@ async def test_ha_stopping_saves_what_was_raised(
     stored = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"]
     assert [f["check"] for f in stored["findings"].values()] == ["N2"]
     assert [(r["check"], r["severity"]) for r in stored["reported"]] == [("N2", "alarm")]
+
+
+# ---- what was learned is kept --------------------------------------------------
+
+def _pause_min(hass: HomeAssistant) -> float:
+    return float(hass.states.get("sensor.freezer_guard_longest_normal_pause").state)
+
+
+def _slow_freezer(now: float) -> list[tuple[float, float | None]]:
+    """Runs 20 min, pauses 100 min."""
+    out: list[tuple[float, float | None]] = []
+    t = now - 80 * 7200.0
+    while t < now - 3600:
+        out += [(t, 40.0), (t + 1200, 1.0)]
+        t += 7200
+    return out
+
+
+async def test_what_was_learned_is_kept_across_reloads(
+        hass: HomeAssistant, dead_freezer, monkeypatch):
+    from custom_components.appliance_guard import watcher as watcher_module
+
+    entry, _ = dead_freezer
+    learned = _pause_min(hass)
+    assert 35 <= learned <= 45
+
+    slow = _slow_freezer(dt_util.utcnow().timestamp())
+
+    async def slow_load(_hass, _entity, _days):
+        return slow
+
+    monkeypatch.setattr(watcher_module, "async_load_readings", slow_load)
+    await _reload(hass, entry)
+    assert _pause_min(hass) == learned  # history changed, what was learned did not
+
+    await hass.services.async_call("button", "press",
+                                   {"entity_id": "button.freezer_guard_relearn"}, blocking=True)
+    await hass.async_block_till_done()
+    assert 95 <= _pause_min(hass) <= 105
+
+
+async def test_new_normal_allows_this_pause_from_now_on(hass: HomeAssistant, dead_freezer):
+    entry, _ = dead_freezer
+    fid = next(iter(entry.runtime_data.findings))
+    await entry.runtime_data.async_respond(fid, "new_normal")
+    assert _pause_min(hass) >= 4 * 60  # the pause had lasted 5 h
+    await _reload(hass, entry)
+    assert _pause_min(hass) >= 4 * 60
+
+
+async def test_a_different_appliance_is_learned_from_now(hass: HomeAssistant, dead_freezer):
+    entry, _ = dead_freezer
+    fid = next(iter(entry.runtime_data.findings))
+    assert "something_new" in entry.runtime_data.offers(fid)
+    await entry.runtime_data.async_respond(fid, "something_new")
+    assert hass.states.get("sensor.freezer_guard_status").state == "learning"
+    await _reload(hass, entry)  # the old history still doesn't count
+    assert hass.states.get("sensor.freezer_guard_status").state == "learning"
+    assert entry.runtime_data.model is None

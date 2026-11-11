@@ -18,11 +18,12 @@ sees one of a few clear signs of trouble.
   over the plug's rating, a plug that switched itself off, failed compressor
   starts, a fridge that stops starting. No vague "unusual usage" scores.
 - **Learns from history, starts right away.** It reads the last 10 days from
-  the recorder, so there is no learning week and nothing to tune.
+  the recorder, so there is no learning week and nothing to tune. What it
+  learned is then kept: a fault never turns into "normal" by itself.
 - **Finds your plugs for you.** Setup lists the smart plugs it finds, sums up
   each one's last 10 days, and pre-ticks the ones worth watching.
 - **Answer in one tap.** Every alert comes with answers such as "It's off on
-  purpose", "Something new is plugged in" or "Cut power", from the
+  purpose", "A different appliance is plugged in" or "Cut power", from the
   notification or from Settings → Repairs. Each answer changes what it
   watches for, and most lapse by themselves.
 - **Assumes cheap plugs.** Many plugs don't reliably restore power after an
@@ -148,7 +149,8 @@ alert:
 | Answer | What happens |
 |---|---|
 | It's off on purpose | No "not starting", "stopped drawing" or "came back off" alerts until the appliance runs again |
-| Something new is plugged in / This is the new normal | Learns again from history |
+| A different appliance is plugged in | Forgets what it learned and learns the new appliance from now on (status `learning` until it has seen about 20 runs) |
+| This is normal for it | Allows this run, pause or level from now on |
 | One-off, it's fine / I'll check it | Closes the alert |
 | Snooze 1 hour / 24 hours | No notices for this plug for that long |
 | Cut power | Switches the plug off and marks it off on purpose |
@@ -164,7 +166,7 @@ Each watched plug gets a device, "*name* guard", with:
 | Problem | On while an alarm is open |
 | Finding | An event for each alert and answer, for your own automations |
 | Mode | **Watching**; **Off on purpose**; **Paused** (only safety alarms come through); **Disabled**. Set it ahead of time: "the basement fridge goes off tomorrow" |
-| Relearn | Learns again from the last 10 days |
+| Relearn | Learns again from the last 10 days, replacing what it kept |
 | Normal running power, Normal power between runs, Longest normal run, Longest normal pause | What it learned (cycling appliances) |
 | Normal minimum power | What it learned (always-on appliances) |
 | After a dropout | What the plug did after losing contact: `not_seen`, `came_back_on` or `came_back_off`. "Came back off" sticks once seen |
@@ -175,8 +177,10 @@ Each watched plug gets a device, "*name* guard", with:
   fuse, aren't added up.
 - A heater stuck on at its normal power looks normal. Only cycling
   appliances get the "running far longer than normal" check.
-- What it learns comes from the last 10 days, so a fridge that works harder
-  in summer may need **Relearn** when the seasons change.
+- What it learned is kept until you answer an alert or press **Relearn**.
+  Learning leaves out time the plug was switched off and the odd run or pause
+  far longer than the rest (a stall, a day unplugged), but a fault already
+  going on for most of the last 10 days at setup is learned as normal.
 
 ## Development
 

@@ -59,7 +59,6 @@ from .const import (
     R_SNOOZE_24H,
     R_SOMETHING_NEW,
     R_TURN_BACK_ON,
-    RELEARN_INTERVAL_H,
     REPLAY_HOURS,
     TICK_S,
 )
@@ -74,7 +73,14 @@ from .detector import (
 )
 from .episodes import IDLE, RUN
 from .learn import async_load_readings, async_load_relay, to_watts
-from .model import Model, NoSteadyDrawError, NotCyclingError, learn_cycling, learn_floor
+from .model import (
+    Model,
+    NoSteadyDrawError,
+    NotCyclingError,
+    learn_cycling,
+    learn_floor,
+    without,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,6 +104,7 @@ STORE_VERSION = 1
 SAVE_DELAY_S = 1
 # Where each check keeps the start of the episode it is about.
 EPISODE_START = {"N1": "run_start", "N2": "pause_start", "S2": "since"}
+LEARN_RETRY_H = 1  # while there is nothing learned yet
 
 
 class Watcher:
@@ -142,6 +149,9 @@ class Watcher:
         self.dropout_record: dict[str, Any] = {"back_on": 0, "back_off": 0, "last": None}
         # What was raised for the episodes going on at the last save, until relearned.
         self._stored_reported: list[Reported] = []
+        # What was learned is kept until the user says otherwise, so a fault never
+        # becomes "normal" by itself. Learning only looks at history after this time.
+        self.learn_from: float | None = None
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -159,8 +169,8 @@ class Watcher:
             self._unsub_stop,
             async_track_state_change_event(hass, [self.power_entity], self._on_power),
             async_track_time_interval(hass, self._on_tick, timedelta(seconds=TICK_S)),
-            async_track_time_interval(hass, self._on_relearn,
-                                      timedelta(hours=RELEARN_INTERVAL_H)),
+            async_track_time_interval(hass, self._on_learn_retry,
+                                      timedelta(hours=LEARN_RETRY_H)),
             hass.bus.async_listen(EVENT_CALL_SERVICE, self._on_call_service),
             hass.bus.async_listen("mobile_app_notification_action", self._on_phone_action),
         ]
@@ -200,6 +210,17 @@ class Watcher:
                 self._sent[fid] = (sent[0], sent[1])
             self._raise_issue(fid, f)  # no phone: it was told when the finding was new
         self._stored_reported = [Reported(**r) for r in stored.get("reported", [])]
+        self._restore_baseline(stored.get("baseline") or {})
+
+    def _restore_baseline(self, b: dict[str, Any]) -> None:
+        self.learn_from = b.get("learn_from")
+        if b.get("profile") != self.cfg.profile.value:
+            return  # the profile was changed: learn again
+        try:
+            self.model = Model(**b["model"]) if b.get("model") else None
+        except TypeError:
+            self.model = None  # stored by a version with other fields
+        self.floor_w = b.get("floor_w")
 
     def _stored(self) -> dict[str, Any]:
         findings = {}
@@ -213,6 +234,10 @@ class Watcher:
             "findings": findings,
             "reported": [vars(r) for r in self._reported()],
             "snooze_until": self.snooze_until,
+            "baseline": {"profile": self.cfg.profile.value,
+                         "model": vars(self.model) if self.model else None,
+                         "floor_w": self.floor_w,
+                         "learn_from": self.learn_from},
         }
 
     def _save(self) -> None:
@@ -232,24 +257,33 @@ class Watcher:
             latest[(r.check, r.severity, r.start)] = r
         return list(latest.values())
 
-    async def _on_relearn(self, _now: datetime) -> None:
-        await self.async_relearn()
-
-    async def async_relearn(self) -> None:
-        """Learn from the recorder, then replay the last hours silently."""
-        readings = await async_load_readings(self.hass, self.power_entity, HISTORY_DAYS)
-        model, note, floor = None, None, None
+    @property
+    def has_baseline(self) -> bool:
+        """Something learned that the checks can use (on-demand plugs need nothing)."""
         if self.cfg.profile == Profile.CYCLING:
-            try:
-                model = await self.hass.async_add_executor_job(learn_cycling, readings)
-            except NotCyclingError as err:
-                note = str(err)
-        elif self.cfg.profile == Profile.ALWAYS_ON:
-            try:
-                floor = await self.hass.async_add_executor_job(learn_floor, readings)
-            except NoSteadyDrawError as err:
-                note = str(err)
-        det = DeviceDetector(self.cfg, model, floor_w=floor)
+            return self.model is not None
+        if self.cfg.profile == Profile.ALWAYS_ON:
+            return self.floor_w is not None
+        return True
+
+    async def _on_learn_retry(self, _now: datetime) -> None:
+        if not self.has_baseline:
+            await self.async_relearn()
+
+    async def async_relearn(self, *, fresh: bool = False) -> None:
+        """Set up the detector: learn if nothing is kept (or `fresh`), replay the last hours.
+
+        Learning leaves out time the plug was switched off, and only looks at history
+        after `learn_from`.
+        """
+        readings = await async_load_readings(self.hass, self.power_entity, HISTORY_DAYS)
+        relay = (await async_load_relay(self.hass, self.relay_entity, HISTORY_DAYS)
+                 if self.relay_entity else ([], []))
+        if fresh:
+            self.model, self.floor_w = None, None
+        if not self.has_baseline:
+            await self._async_learn(readings, relay[0])
+        det = DeviceDetector(self.cfg, self.model, floor_w=self.floor_w)
         cutoff = time.time() - REPLAY_HOURS * 3600
         for ts, watts in readings:
             if ts >= cutoff:
@@ -257,15 +291,52 @@ class Watcher:
         # A problem still going on that nobody was told about is news. One already
         # raised for the same episode is not, whether it is still open or was answered.
         det.resume(self._reported())
-        findings = await self._async_seed_relay(det)
+        findings = self._seed_relay(det, *relay)
         findings += det.tick(time.time())
-        self.model, self.learn_note, self.detector, self.learned = model, note, det, True
-        self.floor_w = floor
-        _LOGGER.debug("%s learned: %s (%s)", self.cfg.name, model, note)
+        self.detector, self.learned = det, True
+        self._save()
         self._handle(findings)
         self._update()
 
-    async def _async_seed_relay(self, det: DeviceDetector) -> list[Finding]:
+    async def _async_learn(self, readings: list[tuple[float, float | None]],
+                           relay_states: list[tuple[float, str]]) -> None:
+        now = time.time()
+        readings = without(readings, _off_spans(relay_states, now))
+        if self.learn_from is not None:
+            readings = [r for r in readings if r[0] >= self.learn_from]
+        self.learn_note = None
+        try:
+            if self.cfg.profile == Profile.CYCLING:
+                self.model = await self.hass.async_add_executor_job(learn_cycling, readings)
+            elif self.cfg.profile == Profile.ALWAYS_ON:
+                self.floor_w = await self.hass.async_add_executor_job(learn_floor, readings)
+        except (NotCyclingError, NoSteadyDrawError) as err:
+            self.learn_note = str(err)
+        _LOGGER.debug("%s learned: %s %s (%s)", self.cfg.name, self.model, self.floor_w,
+                      self.learn_note)
+
+    def _widen(self, f: Finding | None) -> None:
+        """'This is normal for it': allow what the finding was about from now on."""
+        m = self.model
+        if f is None or m is None:
+            return
+        seg = self.detector.seg
+        cur = seg.current if seg is not None else None
+        ongoing = (seg.known_duration(time.time())
+                   if cur is not None and cur.start == f.data.get(EPISODE_START.get(f.check))
+                   else 0.0)
+        dur = max(float(f.data.get("duration_s", 0.0)), ongoing)
+        if f.check == "N1":
+            m = replace(m, max_run_s=max(m.max_run_s, dur), p99_run_s=max(m.p99_run_s, dur))
+        elif f.check == "N2":
+            m = replace(m, max_pause_s=max(m.max_pause_s, dur),
+                        p99_pause_s=max(m.p99_pause_s, dur))
+        elif f.check == "N4" and "watts" in f.data:
+            m = replace(m, pause_level_p90=max(m.pause_level_p90, float(f.data["watts"])))
+        self.model = self.detector.model = m
+
+    def _seed_relay(self, det: DeviceDetector, states: list[tuple[float, str]],
+                    stops: list[float]) -> list[Finding]:
         """Give the detector the relay's last real state, kept through gaps and restarts.
 
         Right after HA starts, the state the plug came back with is news: a plug
@@ -275,7 +346,6 @@ class Watcher:
         if not self.relay_entity:
             return []
         boot, self._at_boot = self._at_boot, False
-        states, stops = await async_load_relay(self.hass, self.relay_entity, HISTORY_DAYS)
         last_stop = max(stops, default=None)
         events = sorted([(t, _relay_on(v)) for t, v in states]
                         + [(t, "stop") for t in stops], key=lambda e: e[0])
@@ -489,8 +559,12 @@ class Watcher:
         now = time.time()
         if response == R_OFF_ON_PURPOSE:
             self.set_mode(MODE_OFF_ON_PURPOSE)
-        elif response in (R_SOMETHING_NEW, R_NEW_NORMAL):
-            await self.async_relearn()
+        elif response == R_SOMETHING_NEW:
+            # A different appliance: what was learned is about the old one.
+            self.learn_from = now
+            await self.async_relearn(fresh=True)
+        elif response == R_NEW_NORMAL:
+            self._widen(f)
         elif response == R_SNOOZE_1H:
             self.snooze_until = now + 3600
         elif response == R_SNOOZE_24H:
@@ -625,6 +699,20 @@ RESPONSE_TITLES = {
     "cut_power": "Cut power",
     "turn_back_on": "Turn back on",
 }
+
+
+def _off_spans(states: list[tuple[float, str]], now: float) -> list[tuple[float, float]]:
+    """When the relay was switched off: the appliance had no power, so learn nothing."""
+    out, since = [], None
+    for ts, state in states:
+        if state == STATE_OFF:
+            since = ts if since is None else since
+        elif since is not None:
+            out.append((since, ts))
+            since = None
+    if since is not None:
+        out.append((since, now))
+    return out
 
 
 def _relay_on(state: str) -> bool | None:

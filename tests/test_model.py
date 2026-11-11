@@ -4,7 +4,7 @@ import pytest
 from replay import at, between, raw
 
 from custom_components.appliance_guard.episodes import RUN, segment_all
-from custom_components.appliance_guard.model import NotCyclingError, learn_cycling
+from custom_components.appliance_guard.model import NotCyclingError, learn_cycling, without
 
 
 def test_basement_fridge_levels_and_rhythm():
@@ -54,3 +54,39 @@ def test_unknown_gap_with_same_state_continues_the_segment():
     assert idle.known_s == 600 + 600
     assert idle.end == 4800 and not idle.complete  # began at the first reading ever
     assert run_.state == RUN and run_.complete and run_.known_s == 1200
+
+
+# ---- what is learned must not take in faults --------------------------------------
+
+def test_a_stall_is_not_learned_as_a_normal_run():
+    # 25 Oct: the old dehumidifier "ran" for 16 h while failing.
+    m = learn_cycling(raw("dehumidifier"), min_runs=10)
+    assert m.max_run_s < 30 * 60
+
+
+def test_a_long_but_real_tail_is_kept():
+    # The LG fridge really does pause for up to ~2.75 h now and then.
+    assert learn_cycling(raw("lg_fridge")).max_pause_s >= 160 * 60
+
+
+def _freezer(days: int = 3) -> list[tuple[float, float | None]]:
+    out: list[tuple[float, float | None]] = []
+    for i in range(days * 24):
+        out += [(i * 3600.0, 40.0), (i * 3600.0 + 1200, 1.0)]
+    return out
+
+
+def test_time_switched_off_is_not_a_pause():
+    readings = _freezer()
+    # Switched off for an hour after a run: short enough to pass as a long pause.
+    off = (30 * 3600.0 + 1300, 31 * 3600.0 + 1300)
+    readings = [r for r in readings if not off[0] <= r[0] < off[1]] + [(off[0], 0.0)]
+    readings.sort()
+    assert learn_cycling(readings).max_pause_s > 90 * 60
+    assert learn_cycling(without(readings, [off])).max_pause_s <= 41 * 60
+
+
+def test_without_turns_the_gaps_into_unknown_time():
+    readings = [(0.0, 1.0), (10.0, 2.0), (20.0, 3.0), (30.0, 4.0)]
+    assert without(readings, [(5.0, 25.0)]) == [(0.0, 1.0), (5.0, None), (30.0, 4.0)]
+    assert without(readings, [(40.0, 50.0)])[-1] == (40.0, None)

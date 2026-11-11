@@ -1,7 +1,9 @@
 """Learn a device's normal behaviour from a reading stream.
 
-v0 learns from raw history only (idle/run levels, run and pause lengths). The seasonal
-envelope from long-term statistics (DESIGN.md section 5) comes later.
+Learns from raw history only (idle/run levels, run and pause lengths). What is learned
+is kept until the user says otherwise (watcher.py), so it must not take in faults:
+time the plug was switched off is left out, and so are runs and pauses far longer
+than the rest (a stall, a day unplugged).
 """
 
 from __future__ import annotations
@@ -12,6 +14,10 @@ from dataclasses import dataclass
 from .episodes import IDLE, RUN, Segment, segment_all
 
 MAX_HOLD_S = 3600.0  # a reading weighs at most this long (sparse plugs, restarts)
+# A run or pause longer than this many times the 95th percentile is not normal: a
+# stall or a day unplugged. Anything tighter cuts the long tail some fridges really have
+# (LG fridge: p95 79 min, longest 165 min).
+OUTLIER_P95 = 3.0
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,33 @@ def weighted_percentile(pairs: list[tuple[float, float]], q: float) -> float:
 
 def percentile(values: list[float], q: float) -> float:
     return weighted_percentile([(v, 1.0) for v in values], q)
+
+
+def without(readings: list[tuple[float, float | None]],
+            gaps: list[tuple[float, float]]) -> list[tuple[float, float | None]]:
+    """The readings with `gaps` (plug switched off, say) turned into unknown time."""
+    if not gaps:
+        return readings
+    out: list[tuple[float, float | None]] = []
+    marks = sorted(gaps)
+    i = 0
+    for ts, w in readings:
+        while i < len(marks) and marks[i][0] <= ts:
+            out.append((marks[i][0], None))
+            i += 1
+        if any(a <= ts < b for a, b in marks[max(0, i - 1):i]):
+            continue
+        out.append((ts, w))
+    out += [(a, None) for a, _ in marks[i:]]
+    return out
+
+
+def typical(values: list[float]) -> list[float]:
+    """Drop the few values far above the rest."""
+    if not values:
+        return values
+    cap = OUTLIER_P95 * percentile(values, 95)
+    return [v for v in values if v <= cap]
 
 
 def time_weighted(readings: list[tuple[float, float | None]]) -> list[tuple[float, float]]:
@@ -111,8 +144,8 @@ def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = 20
     run_w = weighted_percentile([p for p in pairs if p[0] >= threshold], 50)
 
     segs = [s for s in segment_all(readings, threshold) if s.complete]
-    runs = [s.known_s for s in segs if s.state == RUN]
-    pauses = [s.known_s for s in segs if s.state == IDLE]
+    runs = typical([s.known_s for s in segs if s.state == RUN])
+    pauses = typical([s.known_s for s in segs if s.state == IDLE])
     levels = [segment_level(s) for s in segs if s.state == IDLE and s.known_s >= 300]
     if len(runs) < min_runs or not pauses:
         raise NotCyclingError(f"only {len(runs)} complete runs")

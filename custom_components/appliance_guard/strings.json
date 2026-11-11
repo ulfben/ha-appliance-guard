@@ -100,8 +100,8 @@
             "description": "{summary}\n\nWhat's going on?",
             "menu_options": {
               "off_on_purpose": "It's off on purpose (watching resumes when it runs again)",
-              "something_new": "Something new is plugged in (relearn)",
-              "new_normal": "This is the new normal (relearn)",
+              "something_new": "A different appliance is plugged in (learn it from now)",
+              "new_normal": "This is normal for it (allow it from now on)",
               "one_off": "One-off, it's fine",
               "will_check": "I'll check it",
               "snooze_1h": "Snooze 1 hour",
