@@ -164,8 +164,9 @@ class DeviceDetector:
             if was is True and not commanded and self.cfg.ha_only:
                 out.append(Finding("A2", Severity.ALARM, ts,
                                    f"{self.cfg.name}: the plug switched itself off "
-                                   "(overload protection, its button, or a power cut)",
-                                   {"offer": ["turn_back_on", "off_on_purpose"]}))
+                                   "(overload protection, or a power cut)",
+                                   {"offer": ["turn_back_on", "off_on_purpose",
+                                              "switched_by_hand"]}))
             elif (was is True and commanded and self.cfg.critical
                   and self.cfg.profile == Profile.ALWAYS_ON):
                 out.append(Finding("N5", Severity.NOTICE, ts,

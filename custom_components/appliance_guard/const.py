@@ -25,6 +25,10 @@ KEEP_ON_TRIES = 3
 KEEP_ON_WINDOW_S = 3600
 KEEP_ON_AFTER_A1_S = 600
 KEEP_ON_VERIFY_S = 60
+# Drawing this share of the rating shortly before switching off: its overload protection
+# may have tripped before a reading over the rating arrived.
+KEEP_ON_NEAR_FRAC = 0.8
+KEEP_ON_NEAR_S = 120
 
 EVENT_FINDING = f"{DOMAIN}_finding"
 
@@ -44,8 +48,9 @@ R_SNOOZE_1H = "snooze_1h"
 R_SNOOZE_24H = "snooze_24h"
 R_CUT_POWER = "cut_power"
 R_TURN_BACK_ON = "turn_back_on"
+R_SWITCHED_BY_HAND = "switched_by_hand"  # not only HA switches it: no more A2
 RESPONSES = [R_OFF_ON_PURPOSE, R_SOMETHING_NEW, R_ONE_OFF, R_WILL_CHECK,
-             R_SNOOZE_1H, R_SNOOZE_24H, R_CUT_POWER, R_TURN_BACK_ON]
+             R_SNOOZE_1H, R_SNOOZE_24H, R_CUT_POWER, R_TURN_BACK_ON, R_SWITCHED_BY_HAND]
 NEEDS_RELAY = {R_CUT_POWER, R_TURN_BACK_ON}
 
 # Phone action ids: "<prefix>|<entry_id>|<finding_id>|<response>"

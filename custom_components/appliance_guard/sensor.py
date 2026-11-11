@@ -90,6 +90,8 @@ class StatusSensor(GuardEntity, SensorEntity):
             "last_finding": f.summary if f else None,
             "mode": w.mode,
             "learning_note": w.learn_note,
+            "keep_powered": ("waiting_for_answer" if w.keep_on and w.keep_on_halted
+                             else "on" if w.keep_on else "off"),
             "watched_entity": w.power_entity,
         }
 

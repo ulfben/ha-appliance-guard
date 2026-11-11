@@ -647,3 +647,93 @@ async def test_keep_powered_needs_ha_to_be_the_only_switch(hass: HomeAssistant):
     await hass.async_block_till_done()
     assert entry.runtime_data.keep_on is False
     assert _issues(hass) == [] and turn_on == []
+
+
+# ---- Keep powered and "switched itself off" are safe -------------------------------
+
+async def test_keep_powered_needs_a_rating(hass: HomeAssistant):
+    hass.states.async_set(POWER, "70", {"device_class": "power", "unit_of_measurement": "W"})
+    hass.states.async_set(RELAY, "on")
+    entry = MockConfigEntry(domain=DOMAIN, title="Kettle", data={CONF_POWER_ENTITY: POWER},
+                            options={**OPTIONS, CONF_KEEP_ON: True, CONF_RATING_W: None},
+                            unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.runtime_data.keep_on is False
+    status = hass.states.get("sensor.kettle_guard_status")
+    assert status.attributes["keep_powered"] == "off"
+
+
+async def test_keep_powered_not_after_drawing_close_to_the_rating(
+        hass: HomeAssistant, keep_on, freezer):
+    """The plug tripped before a reading over the rating arrived."""
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set(POWER, "2300")  # 92 % of 2500 W: no A1 yet
+    await hass.async_block_till_done()
+    hass.states.async_set(RELAY, "off", context=Context())
+    hass.states.async_set(POWER, "0")
+    await hass.async_block_till_done()
+    await _tick_later(hass, freezer, 11)
+    assert turn_on == []
+    summaries = [i.translation_placeholders["summary"] for i in _issues(hass)]
+    assert any("drew 2300 W just before" in s for s in summaries), summaries
+
+
+async def _give_up(hass: HomeAssistant, freezer) -> list:
+    turn_on = async_mock_service(hass, "switch", "turn_on")  # the relay never follows
+    hass.states.async_set(RELAY, "off", context=Context())
+    await hass.async_block_till_done()
+    await _tick_later(hass, freezer, 11)
+    for _ in range(4):
+        await _tick_later(hass, freezer, 61)
+    assert len(turn_on) == 3
+    return turn_on
+
+
+async def test_keep_powered_waits_for_an_answer_after_giving_up(
+        hass: HomeAssistant, keep_on, freezer):
+    turn_on = await _give_up(hass, freezer)
+    assert hass.states.get("sensor.kettle_guard_status").attributes[
+        "keep_powered"] == "waiting_for_answer"
+
+    # Two hours later someone turns it on at the plug, and it trips again.
+    await _tick_later(hass, freezer, 7200)
+    hass.states.async_set(RELAY, "on", context=Context())
+    hass.states.async_set(RELAY, "off", context=Context())
+    await _tick_later(hass, freezer, 120)
+    assert len(turn_on) == 3  # the old sliding window would have tried again
+    assert any("waits until the earlier alert is answered" in
+               i.translation_placeholders["summary"] for i in _issues(hass))
+
+    await _reload(hass, keep_on)  # still waiting after a restart
+    assert keep_on.runtime_data.keep_on_halted is True
+
+    w = keep_on.runtime_data
+    gave_up = next(fid for fid, f in w.findings.items() if "tries" in f.summary)
+    await w.async_respond(gave_up, "will_check")
+    assert w.keep_on_halted is False
+
+
+async def test_switched_itself_off_is_quiet_when_off_on_purpose(hass: HomeAssistant, setup):
+    entry, _ = setup
+    entry.runtime_data.set_mode(MODE_OFF_ON_PURPOSE)
+    hass.states.async_set(RELAY, "off", context=Context())
+    await hass.async_block_till_done()
+    assert _issues(hass) == []
+
+
+async def test_i_switch_it_by_hand_stops_switched_itself_off(hass: HomeAssistant, setup):
+    entry, _ = setup
+    hass.states.async_set(RELAY, "off", context=Context())  # its button
+    await hass.async_block_till_done()
+    fid = next(iter(entry.runtime_data.findings))
+    assert "switched_by_hand" in entry.runtime_data.offers(fid)
+    await entry.runtime_data.async_respond(fid, "switched_by_hand")
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.options[CONF_HA_ONLY] is False  # and the entry reloaded with it
+
+    hass.states.async_set(RELAY, "on", context=Context())
+    hass.states.async_set(RELAY, "off", context=Context())
+    await hass.async_block_till_done()
+    assert _issues(hass) == []

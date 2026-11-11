@@ -95,12 +95,13 @@ and its history. Then open **Configure** on each one and check:
   its own app or a voice assistant, since each of those would look the same.
   On by default for critical plugs: while the relay is off, a fridge isn't
   watched for not starting, so this is what catches its plug tripping.
-- **Keep powered:** needs the setting above. Turns the plug back on by itself
-  when it switches itself off or comes back off after a power cut, and tells
-  you. It never does so
-  right after the plug was over its rating, and gives up after 3 tries in an
-  hour. Worth it for network gear: while the network is down, the alarm
-  can't reach your phone anyway.
+- **Keep powered:** needs the plug rating and the setting above. Turns the
+  plug back on by itself when it switches itself off or comes back off after
+  a power cut, and tells you. It never does so when the plug was over or
+  close to its rating just before (its overload protection may have tripped),
+  and gives up after 3 tries in an hour. Once it gives up, it raises an alarm
+  and leaves the plug alone until you answer. Worth it for network gear: while
+  the network is down, the alarm can't reach your phone anyway.
 - **Relay switch** and **Phones to notify**.
 
 To watch a sensor that isn't on a smart plug, choose **Pick a power sensor
@@ -151,12 +152,13 @@ alert:
 
 | Answer | What happens |
 |---|---|
-| It's off on purpose | No "not starting", "stopped drawing" or "came back off" alerts until the appliance runs again |
+| It's off on purpose | No "not starting", "stopped drawing", "switched itself off" or "came back off" alerts until the appliance runs again |
 | A different appliance is plugged in | Forgets what it learned and learns the new appliance from now on (status `learning` until it has seen about 20 runs) |
 | One-off, it's fine / I'll check it | Closes the alert |
 | Snooze 1 hour / 24 hours | No notices for this plug for that long |
 | Cut power | Switches the plug off and marks it off on purpose |
 | Turn the plug back on | Switches the plug on |
+| I switch this plug by hand too | Turns off **Only Home Assistant switches this plug** for it, so its button or app no longer raises "switched itself off" (and Keep powered stops) |
 
 ## Entities
 

@@ -44,6 +44,8 @@ from .const import (
     EVENT_FINDING,
     HISTORY_DAYS,
     KEEP_ON_AFTER_A1_S,
+    KEEP_ON_NEAR_FRAC,
+    KEEP_ON_NEAR_S,
     KEEP_ON_TRIES,
     KEEP_ON_VERIFY_S,
     KEEP_ON_WINDOW_S,
@@ -58,6 +60,7 @@ from .const import (
     R_SNOOZE_1H,
     R_SNOOZE_24H,
     R_SOMETHING_NEW,
+    R_SWITCHED_BY_HAND,
     R_TURN_BACK_ON,
     REPLAY_HOURS,
     TICK_S,
@@ -96,7 +99,7 @@ CHECK_TITLES = {
 # Safety alarms come through even while paused or snoozed.
 SAFETY = {"A1", "A2", "A3", "A5"}
 # Quiet while the appliance is off on purpose.
-OFF_CHECKS = ("N2", "A5", "N5", "S2")
+OFF_CHECKS = ("N2", "A2", "A5", "N5", "S2")
 KEEP_ON_DELAY_S = 10  # lets an overload reading that raced the relay arrive first
 STORE_VERSION = 1
 SAVE_DELAY_S = 1
@@ -123,9 +126,14 @@ class Watcher:
             ha_only=bool(o.get(CONF_HA_ONLY, critical)) and self.relay_entity is not None,
         )
         self.notify_targets: list[str] = list(o.get(CONF_NOTIFY) or [])
-        # Turning a plug back on is only safe where nobody else switches it off.
-        self.keep_on = bool(o.get(CONF_KEEP_ON, False)) and self.cfg.ha_only
+        # Turning a plug back on is only safe where nobody else switches it off, and
+        # where an overload can be seen.
+        self.keep_on = (bool(o.get(CONF_KEEP_ON, False)) and self.cfg.ha_only
+                        and self.cfg.rating_w is not None)
         self._keep_on_tries: deque[float] = deque()
+        # After giving up, Keep powered waits until the user has answered.
+        self.keep_on_halted = False
+        self._recent_w: deque[tuple[float, float]] = deque()
         self._last_a1: float | None = None
         self.model: Model | None = None
         self.floor_w: float | None = None
@@ -202,6 +210,7 @@ class Watcher:
     def _restore(self, stored: dict[str, Any]) -> None:
         self.dropout_record |= stored.get("dropouts", {})
         self.snooze_until = stored.get("snooze_until")
+        self.keep_on_halted = bool(stored.get("keep_on_halted", False))
         for fid, d in stored.get("findings", {}).items():
             f = Finding(d["check"], Severity(d["severity"]), d["ts"], d["summary"],
                         d.get("data", {}))
@@ -235,6 +244,7 @@ class Watcher:
             "findings": findings,
             "reported": [vars(r) for r in self._reported()],
             "snooze_until": self.snooze_until,
+            "keep_on_halted": self.keep_on_halted,
             "baseline": {"profile": self.cfg.profile.value,
                          "model": vars(self.model) if self.model else None,
                          "floor_w": self.floor_w,
@@ -353,6 +363,11 @@ class Watcher:
         if new is None:
             return
         watts = to_watts(new)
+        if watts is not None:
+            now = new.last_updated_timestamp
+            self._recent_w.append((now, watts))
+            while self._recent_w and now - self._recent_w[0][0] > KEEP_ON_NEAR_S:
+                self._recent_w.popleft()
         before = self._seg_state()
         findings = self.detector.feed(new.last_updated_timestamp, watts)
         self._track_purpose(before, watts)
@@ -438,6 +453,10 @@ class Watcher:
                             summary=f"{f.summary} Turning it back on.",
                             data={**f.data, "kept_on": True,
                                   "offer": ["off_on_purpose", "will_check"]})
+            elif self._keeps_on(f, halted_too=True):
+                f = replace(f, summary=f"{f.summary} Not turned back on: Keep powered "
+                            "waits until the earlier alert is answered.",
+                            data={**f.data, "kept_on": False})
             fid = f"{f.check}_{int(f.ts)}"
             self.findings[fid] = f
             self.last_finding = f
@@ -470,13 +489,19 @@ class Watcher:
 
     # ---- keep powered ------------------------------------------------------------
 
-    def _keeps_on(self, f: Finding) -> bool:
+    def _keeps_on(self, f: Finding, halted_too: bool = False) -> bool:
         return (self.keep_on and f.check in ("A2", "A5") and self.mode == MODE_WATCHING
-                and "kept_on" not in f.data)
+                and "kept_on" not in f.data and (halted_too or not self.keep_on_halted))
 
     def _keep_on_refusal(self, now: float) -> str | None:
         if self._last_a1 is not None and now - self._last_a1 < KEEP_ON_AFTER_A1_S:
             return "it was just over its rating, so its overload protection may have tripped"
+        rating = self.cfg.rating_w or 0.0
+        near = [w for t, w in self._recent_w
+                if now - t <= KEEP_ON_NEAR_S + KEEP_ON_DELAY_S and w >= KEEP_ON_NEAR_FRAC * rating]
+        if near:
+            return (f"it drew {max(near):.0f} W just before, close to its {rating:.0f} W "
+                    "rating, so its overload protection may have tripped")
         while self._keep_on_tries and now - self._keep_on_tries[0] > KEEP_ON_WINDOW_S:
             self._keep_on_tries.popleft()
         if len(self._keep_on_tries) >= KEEP_ON_TRIES:
@@ -521,7 +546,10 @@ class Watcher:
         self._give_up(f, f"It did not come back on after {len(self._keep_on_tries)} tries.")
 
     def _give_up(self, f: Finding, why: str) -> None:
-        self._handle([replace(f, ts=time.time(), summary=f"{f.summary} {why}",
+        """Alarm, and leave the plug alone until someone has looked at it."""
+        self.keep_on_halted = True
+        self._handle([replace(f, ts=time.time(),
+                              summary=f"{f.summary} {why} Keep powered waits until you answer.",
                               data={**f.data, "kept_on": False})])
 
     def issue_id(self, fid: str) -> str:
@@ -538,6 +566,8 @@ class Watcher:
         self._sent.pop(fid, None)
         ir.async_delete_issue(self.hass, DOMAIN, self.issue_id(fid))
         now = time.time()
+        if f is not None and f.data.get("kept_on") is False:
+            self.keep_on_halted = False  # someone has looked at it
         if response == R_OFF_ON_PURPOSE:
             self.set_mode(MODE_OFF_ON_PURPOSE)
         elif response == R_SOMETHING_NEW:
@@ -555,6 +585,10 @@ class Watcher:
         elif response == R_TURN_BACK_ON and self.relay_entity:
             await self.hass.services.async_call(
                 "switch", "turn_on", {"entity_id": self.relay_entity}, blocking=True)
+        elif response == R_SWITCHED_BY_HAND:
+            # Its button or app switches it too: an off relay is no longer a fault here.
+            self.hass.config_entries.async_update_entry(
+                self.entry, options={**self.entry.options, CONF_HA_ONLY: False})
         self._save()
         _LOGGER.info("%s: %s answered with %s", self.cfg.name, fid, response)
         self._emit("response", {"entry_id": self.entry.entry_id, "finding_id": fid,
@@ -676,6 +710,7 @@ RESPONSE_TITLES = {
     "snooze_24h": "Snooze 24 h",
     "cut_power": "Cut power",
     "turn_back_on": "Turn back on",
+    "switched_by_hand": "I switch it by hand",
 }
 
 

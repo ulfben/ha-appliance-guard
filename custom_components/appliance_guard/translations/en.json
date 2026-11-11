@@ -46,7 +46,7 @@
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
           "critical": "Cycling (fridge, freezer): not starting for much longer than its longest normal pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier; they are still watched for failed starts. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
           "ha_only": "Then the plug switching off by itself is an alarm (overload protection, a power cut). Leave off if the plug is also switched by its button, its own app or a voice assistant: each of those would raise a false alarm. Needed for Keep powered.",
-          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs 'Only Home Assistant switches this plug'. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs the plug rating and 'Only Home Assistant switches this plug'. Never when it was near its rating just before, at most 3 times an hour, and after giving up it waits until you answer. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     },
@@ -80,7 +80,7 @@
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
           "critical": "Cycling (fridge, freezer): not starting for much longer than its longest normal pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier; they are still watched for failed starts. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
           "ha_only": "Then the plug switching off by itself is an alarm (overload protection, a power cut). Leave off if the plug is also switched by its button, its own app or a voice assistant: each of those would raise a false alarm. Needed for Keep powered.",
-          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs 'Only Home Assistant switches this plug'. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs the plug rating and 'Only Home Assistant switches this plug'. Never when it was near its rating just before, at most 3 times an hour, and after giving up it waits until you answer. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     }
@@ -110,7 +110,8 @@
               "snooze_1h": "Snooze 1 hour",
               "snooze_24h": "Snooze 24 hours",
               "cut_power": "Cut power (switch the plug off)",
-              "turn_back_on": "Turn the plug back on"
+              "turn_back_on": "Turn the plug back on",
+              "switched_by_hand": "I switch this plug by hand too (stop this alert for it)"
             }
           }
         },
