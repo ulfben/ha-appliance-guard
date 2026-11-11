@@ -215,6 +215,11 @@ class DeviceDetector:
             out += self._n2(now, cur, self.seg.known_duration(now))
         return out
 
+    @property
+    def relay_known(self) -> bool | None:
+        """The relay's last real state, kept through gaps."""
+        return self._relay_known
+
     # ---- helpers ------------------------------------------------------------
 
     def _insane(self, watts: float) -> bool:

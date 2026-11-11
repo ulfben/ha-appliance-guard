@@ -101,6 +101,7 @@ SAFETY = {"A1", "A2", "A3", "A5"}
 # Quiet while the appliance is off on purpose.
 OFF_CHECKS = ("N2", "A2", "A5", "N5", "S2")
 KEEP_ON_DELAY_S = 10  # lets an overload reading that raced the relay arrive first
+OFF_ON_PURPOSE_W = 5.0  # drawing this again ends "off on purpose" (not cycling)
 STORE_VERSION = 1
 SAVE_DELAY_S = 1
 # Where each check keeps the start of the episode it is about.
@@ -379,8 +380,12 @@ class Watcher:
         new = event.data.get("new_state")
         if new is None:
             return
+        was = self.detector.relay_known
         findings = self.detector.feed_relay(
             new.last_updated_timestamp, _relay_on(new.state), self._commanded(new.context))
+        if (was is False and _relay_on(new.state) is True and self.mode == MODE_OFF_ON_PURPOSE
+                and self.detector.seg is None):
+            self.set_mode(MODE_WATCHING)  # switched back on: it's back
         self._handle(findings)
         self._collect_dropouts()
 
@@ -607,11 +612,18 @@ class Watcher:
         return seg.current.state if seg is not None and seg.current is not None else None
 
     def _track_purpose(self, before: str | None, watts: float | None) -> None:
-        """'Off on purpose' lapses when the device runs normally again."""
+        """'Off on purpose' lapses when the device runs normally again.
+
+        Cycling: a few normal runs. Others: switched back on, or drawing again. For an
+        always-on load that is half its learned floor, so a 3 W media converter counts.
+        """
         if self.mode != MODE_OFF_ON_PURPOSE or watts is None:
             return
-        if self.detector.seg is None:  # not cycling: any real draw counts
-            if watts > 5:
+        if self.detector.seg is None:
+            drawing = OFF_ON_PURPOSE_W
+            if self.floor_w is not None:
+                drawing = min(drawing, self.floor_w * self.detector.lim.s2_frac)
+            if watts >= drawing:
                 self.set_mode(MODE_WATCHING)
             return
         if before == IDLE and self._seg_state() == RUN:
@@ -680,6 +692,39 @@ class Watcher:
         if not self.learned or (self.cfg.profile == Profile.CYCLING and self.model is None):
             return "learning"
         return "ok"
+
+    def checks(self) -> dict[str, str]:
+        """Each check that could apply to this plug: 'watching', or why not right now."""
+        cfg, now = self.cfg, time.time()
+        cycling, always_on = cfg.profile == Profile.CYCLING, cfg.profile == Profile.ALWAYS_ON
+        relay = "no relay switch set" if not self.relay_entity else None
+        learning = "learning" if not self.has_baseline else None
+        possible: dict[str, str | None] = {
+            "A1": None if cfg.rating_w else "no plug rating set",
+            "A2": relay or (None if cfg.ha_only
+                            else "not set: only Home Assistant switches this plug"),
+            "A5": relay,
+        }
+        if cycling:
+            possible["A3"] = learning
+            possible["N2"] = learning if cfg.critical else "not critical"
+        if always_on:
+            possible["S2"] = learning
+            possible["N5"] = relay or (None if cfg.critical else "not critical")
+        snoozed = self.snooze_until is not None and now < self.snooze_until
+        out: dict[str, str] = {}
+        for check, why in possible.items():
+            if why is None:
+                if self.mode == MODE_DISABLED:
+                    why = "disabled"
+                elif self.mode == MODE_OFF_ON_PURPOSE and check in OFF_CHECKS:
+                    why = "off on purpose"
+                elif check not in SAFETY and self.mode == MODE_PAUSED:
+                    why = "paused"
+                elif check not in SAFETY and snoozed:
+                    why = "snoozed"
+            out[CHECK_TITLES[check]] = why or "watching"
+        return out
 
     @callback
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:

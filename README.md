@@ -166,7 +166,7 @@ Each watched plug gets a device, "*name* guard", with:
 
 | Entity | What it shows |
 |---|---|
-| Status | `ok`, `learning`, `notice`, `alarm`, `off_on_purpose`, `paused` or `disabled` |
+| Status | `ok`, `learning`, `notice`, `alarm`, `off_on_purpose`, `paused` or `disabled`. Its `checks` attribute lists each check for this plug and whether it is watching, or why not (no rating set, off on purpose, paused, learning) |
 | Problem | On while an alarm is open |
 | Finding | An event for each alert and answer, for your own automations |
 | Mode | **Watching**; **Off on purpose**; **Paused** (only safety alarms come through); **Disabled**. Set it ahead of time: "the basement fridge goes off tomorrow" |
@@ -179,13 +179,10 @@ Each watched plug gets a device, "*name* guard", with:
 
 - It watches each plug on its own. Several plugs on one power strip, or one
   fuse, aren't added up.
-- A heater stuck on at its normal power looks normal, and so does a fridge
-  that runs without stopping or a door left ajar: runs that are too long and
-  extra draw between runs vary too much for real fridges to alert on reliably.
-- What it learned is kept until you answer an alert or press **Relearn**.
-  Learning leaves out time the plug was switched off and the odd pause far
-  longer than the rest (a day unplugged), but a fault already
-  going on for most of the last 10 days at setup is learned as normal.
+- A heater stuck on at its normal power, a fridge that never stops running
+  and a door left ajar all look normal.
+- A fault already going on for most of the 10 days before setup is learned
+  as normal.
 
 ## Development
 

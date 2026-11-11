@@ -737,3 +737,72 @@ async def test_i_switch_it_by_hand_stops_switched_itself_off(hass: HomeAssistant
     hass.states.async_set(RELAY, "off", context=Context())
     await hass.async_block_till_done()
     assert _issues(hass) == []
+
+
+# ---- what is watched, and suppressions that lapse --------------------------------
+
+def _checks(hass: HomeAssistant, name: str = "kettle") -> dict[str, str]:
+    return hass.states.get(f"sensor.{name}_guard_status").attributes["checks"]
+
+
+async def test_status_shows_what_is_watched_and_why_not(hass: HomeAssistant, setup):
+    entry, _ = setup
+    assert _checks(hass) == {"over the plug's rating": "watching",
+                             "plug switched itself off": "watching",
+                             "plug came back off after a dropout": "watching"}
+    entry.runtime_data.set_mode(MODE_OFF_ON_PURPOSE)
+    assert _checks(hass)["plug came back off after a dropout"] == "off on purpose"
+    assert _checks(hass)["over the plug's rating"] == "watching"
+
+
+async def test_status_names_missing_settings(hass: HomeAssistant, dead_freezer):
+    assert _checks(hass, "freezer") == {
+        "over the plug's rating": "no plug rating set",
+        "plug switched itself off": "no relay switch set",
+        "plug came back off after a dropout": "no relay switch set",
+        "failed starts": "watching",
+        "not starting": "watching",
+    }
+
+
+async def test_off_on_purpose_ends_when_switched_back_on(hass: HomeAssistant, setup):
+    entry, _ = setup
+    w = entry.runtime_data
+    w.set_mode(MODE_OFF_ON_PURPOSE)
+    hass.states.async_set(RELAY, "unavailable")  # a dropout is not "back on"
+    hass.states.async_set(RELAY, "on")
+    await hass.async_block_till_done()
+    assert w.mode == MODE_OFF_ON_PURPOSE
+    hass.states.async_set(RELAY, "off")
+    hass.states.async_set(RELAY, "on")
+    await hass.async_block_till_done()
+    assert w.mode == "watching"
+
+
+async def test_off_on_purpose_ends_for_a_tiny_always_on_load(hass: HomeAssistant, monkeypatch):
+    """A 3 W media converter: drawing again is above half its floor, not above 5 W."""
+    from custom_components.appliance_guard import watcher as watcher_module
+
+    now = dt_util.utcnow().timestamp()
+    readings = [(now - 2 * 86400 + 600 * i, 3.0 + (i % 2) * 0.2) for i in range(280)]
+
+    async def fake_load(_hass, _entity, _days):
+        return readings
+
+    monkeypatch.setattr(watcher_module, "async_load_readings", fake_load)
+    hass.states.async_set(POWER, "3", {"device_class": "power", "unit_of_measurement": "W"})
+    entry = MockConfigEntry(domain=DOMAIN, title="Fiber", data={CONF_POWER_ENTITY: POWER},
+                            options={CONF_NAME: "Fiber", CONF_PROFILE: "always_on",
+                                     CONF_CRITICAL: True}, unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    w = entry.runtime_data
+    assert w.floor_w is not None and w.floor_w < 5
+    w.set_mode(MODE_OFF_ON_PURPOSE)
+    hass.states.async_set(POWER, "0")
+    await hass.async_block_till_done()
+    assert w.mode == MODE_OFF_ON_PURPOSE
+    hass.states.async_set(POWER, "3.1")
+    await hass.async_block_till_done()
+    assert w.mode == "watching"

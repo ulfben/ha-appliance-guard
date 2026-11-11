@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -92,6 +93,9 @@ class StatusSensor(GuardEntity, SensorEntity):
             "learning_note": w.learn_note,
             "keep_powered": ("waiting_for_answer" if w.keep_on and w.keep_on_halted
                              else "on" if w.keep_on else "off"),
+            "checks": w.checks(),
+            "snoozed_until": (dt_util.utc_from_timestamp(w.snooze_until).isoformat()
+                              if w.snooze_until and w.snooze_until > time.time() else None),
             "watched_entity": w.power_entity,
         }
 
