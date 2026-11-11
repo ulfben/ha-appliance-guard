@@ -11,7 +11,12 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_CALL_SERVICE, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    EVENT_CALL_SERVICE,
+    EVENT_HOMEASSISTANT_STOP,
+    STATE_OFF,
+    STATE_ON,
+)
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import (
@@ -58,7 +63,15 @@ from .const import (
     REPLAY_HOURS,
     TICK_S,
 )
-from .detector import DeviceConfig, DeviceDetector, Dropout, Finding, Profile, Severity
+from .detector import (
+    DeviceConfig,
+    DeviceDetector,
+    Dropout,
+    Finding,
+    Profile,
+    Reported,
+    Severity,
+)
 from .episodes import IDLE, RUN
 from .learn import async_load_readings, async_load_relay, to_watts
 from .model import Model, NoSteadyDrawError, NotCyclingError, learn_cycling, learn_floor
@@ -82,6 +95,9 @@ SAFETY = {"A1", "A2", "A3", "A5"}
 OFF_CHECKS = ("N2", "A5", "N5", "S2")
 KEEP_ON_DELAY_S = 10  # lets an overload reading that raced the relay arrive first
 STORE_VERSION = 1
+SAVE_DELAY_S = 1
+# Where each check keeps the start of the episode it is about.
+EPISODE_START = {"N1": "run_start", "N2": "pause_start", "S2": "since"}
 
 
 class Watcher:
@@ -118,11 +134,14 @@ class Watcher:
         self._listeners: list[Callable[[], None]] = []
         self._event_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._unsubs: list[Callable[[], None]] = []
+        self._unsub_stop: Callable[[], None] | None = None
         # Set up while HA is starting: the relay's current state may be news (A5).
         self._at_boot = not hass.is_running
         self._store: Store[dict[str, Any]] = Store(
             hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.dropout_record: dict[str, Any] = {"back_on": 0, "back_off": 0, "last": None}
+        # What was raised for the episodes going on at the last save, until relearned.
+        self._stored_reported: list[Reported] = []
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -132,10 +151,12 @@ class Watcher:
 
     async def _async_begin(self) -> None:
         if (stored := await self._store.async_load()) is not None:
-            self.dropout_record |= stored.get("dropouts", {})
+            self._restore(stored)
         await self.async_relearn()
         hass = self.hass
+        self._unsub_stop = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_ha_stop)
         self._unsubs += [
+            self._unsub_stop,
             async_track_state_change_event(hass, [self.power_entity], self._on_power),
             async_track_time_interval(hass, self._on_tick, timedelta(seconds=TICK_S)),
             async_track_time_interval(hass, self._on_relearn,
@@ -147,13 +168,69 @@ class Watcher:
             self._unsubs.append(
                 async_track_state_change_event(hass, [self.relay_entity], self._on_relay))
 
-    @callback
-    def async_stop(self) -> None:
+    async def async_stop(self) -> None:
+        """Unloading (reload, options saved, removed): save, then take the issues down.
+
+        They come back from the store when the entry is set up again.
+        """
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        await self._store.async_save(self._stored())
         for fid in list(self.findings):
             ir.async_delete_issue(self.hass, DOMAIN, self.issue_id(fid))
+
+    @callback
+    def _on_ha_stop(self, _event: Event) -> None:
+        # A listen_once listener must not be removed after it has fired.
+        self._unsubs = [u for u in self._unsubs if u is not self._unsub_stop]
+        self._save()  # written at the final write, with the episodes as they are then
+
+    # ---- what survives a restart ----------------------------------------------
+
+    def _restore(self, stored: dict[str, Any]) -> None:
+        self.dropout_record |= stored.get("dropouts", {})
+        self.snooze_until = stored.get("snooze_until")
+        for fid, d in stored.get("findings", {}).items():
+            f = Finding(d["check"], Severity(d["severity"]), d["ts"], d["summary"],
+                        d.get("data", {}))
+            self.findings[fid] = f
+            self.last_finding = f
+            if sent := d.get("sent"):
+                self._sent[fid] = (sent[0], sent[1])
+            self._raise_issue(fid, f)  # no phone: it was told when the finding was new
+        self._stored_reported = [Reported(**r) for r in stored.get("reported", [])]
+
+    def _stored(self) -> dict[str, Any]:
+        findings = {}
+        for fid, f in self.findings.items():
+            findings[fid] = {"check": f.check, "severity": f.severity.value, "ts": f.ts,
+                             "summary": f.summary, "data": f.data}
+            if fid in self._sent:
+                findings[fid]["sent"] = list(self._sent[fid])
+        return {
+            "dropouts": self.dropout_record,
+            "findings": findings,
+            "reported": [vars(r) for r in self._reported()],
+            "snooze_until": self.snooze_until,
+        }
+
+    def _save(self) -> None:
+        self._store.async_delay_save(self._stored, SAVE_DELAY_S)
+
+    def _reported(self) -> list[Reported]:
+        """Raised for the episodes going on now: open findings, and answered ones."""
+        if self.learned:
+            out = self.detector.reported(time.time())
+        else:
+            out = list(self._stored_reported)
+        for f in self.findings.values():
+            if (key := EPISODE_START.get(f.check)) and key in f.data:
+                out.append(Reported(f.check, f.severity.value, f.data[key], f.ts))
+        latest: dict[tuple[str, str, float], Reported] = {}
+        for r in sorted(out, key=lambda r: r.seen_at):
+            latest[(r.check, r.severity, r.start)] = r
+        return list(latest.values())
 
     async def _on_relearn(self, _now: datetime) -> None:
         await self.async_relearn()
@@ -177,8 +254,9 @@ class Watcher:
         for ts, watts in readings:
             if ts >= cutoff:
                 det.feed(ts, watts)  # findings about the past are not reported
-        if not any(f.check == "S2" for f in self.findings.values()):
-            det.rearm_s2()  # still stopped now: that is news
+        # A problem still going on that nobody was told about is news. One already
+        # raised for the same episode is not, whether it is still open or was answered.
+        det.resume(self._reported())
         findings = await self._async_seed_relay(det)
         findings += det.tick(time.time())
         self.model, self.learn_note, self.detector, self.learned = model, note, det, True
@@ -269,7 +347,7 @@ class Watcher:
             rec["last"] = {"ts": d.ts, "outcome": d.outcome, "gap_s": round(d.gap_s),
                            "ha_down": d.ha_down}
         seen.clear()
-        self._store.async_delay_save(lambda: {"dropouts": self.dropout_record}, 5)
+        self._save()
         self._update()
 
     @property
@@ -293,6 +371,8 @@ class Watcher:
 
     @callback
     def _handle(self, findings: list[Finding]) -> None:
+        if findings:
+            self._save()  # suppressed ones too: they count as raised for their episode
         changed = False
         for f in findings:
             if f.check == "A1":
@@ -311,21 +391,7 @@ class Watcher:
             self.findings[fid] = f
             self.last_finding = f
             changed = True
-            ir.async_create_issue(
-                self.hass, DOMAIN, self.issue_id(fid),
-                is_fixable=True,
-                is_persistent=False,
-                severity=ir.IssueSeverity.ERROR if f.severity == Severity.ALARM
-                else ir.IssueSeverity.WARNING,
-                translation_key="finding",
-                translation_placeholders={
-                    "name": self.cfg.name,
-                    "check": CHECK_TITLES.get(f.check, f.check),
-                    "severity": f.severity.value,
-                    "summary": f.summary,
-                },
-                data={"entry_id": self.entry.entry_id, "finding_id": fid},
-            )
+            self._raise_issue(fid, f)
             payload = {"entry_id": self.entry.entry_id, "finding_id": fid, "check": f.check,
                        "severity": f.severity.value, "summary": f.summary}
             self.hass.bus.async_fire(EVENT_FINDING, payload)
@@ -333,6 +399,23 @@ class Watcher:
             self._send_phone(fid, f)
         if changed:
             self._update()
+
+    def _raise_issue(self, fid: str, f: Finding) -> None:
+        ir.async_create_issue(
+            self.hass, DOMAIN, self.issue_id(fid),
+            is_fixable=True,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR if f.severity == Severity.ALARM
+            else ir.IssueSeverity.WARNING,
+            translation_key="finding",
+            translation_placeholders={
+                "name": self.cfg.name,
+                "check": CHECK_TITLES.get(f.check, f.check),
+                "severity": f.severity.value,
+                "summary": f.summary,
+            },
+            data={"entry_id": self.entry.entry_id, "finding_id": fid},
+        )
 
     # ---- keep powered ------------------------------------------------------------
 
@@ -419,6 +502,7 @@ class Watcher:
         elif response == R_TURN_BACK_ON and self.relay_entity:
             await self.hass.services.async_call(
                 "switch", "turn_on", {"entity_id": self.relay_entity}, blocking=True)
+        self._save()
         _LOGGER.info("%s: %s answered with %s", self.cfg.name, fid, response)
         self._emit("response", {"entry_id": self.entry.entry_id, "finding_id": fid,
                                 "check": f.check if f else None, "response": response})
@@ -455,6 +539,7 @@ class Watcher:
             return
         last, times = self._sent.get(fid, (0.0, 0))
         self._sent[fid] = (time.time(), times + 1)
+        self._save()
         actions = [
             {"action": f"{ACTION_PREFIX}|{self.entry.entry_id}|{fid}|{r}",
              "title": RESPONSE_TITLES.get(r, r)}

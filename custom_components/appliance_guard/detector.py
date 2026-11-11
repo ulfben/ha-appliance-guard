@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from .episodes import IDLE, RUN, Segment, Segmenter
+from .episodes import FIRST, IDLE, RUN, Segment, Segmenter
 from .model import Model
 
 
@@ -45,6 +45,21 @@ class Dropout:
     outcome: str  # "on" or "off"
     gap_s: float
     ha_down: bool  # Home Assistant was down during the gap
+
+
+@dataclass(frozen=True)
+class Reported:
+    """A finding already raised for an episode (a run, a pause, a stop) that may still be going on.
+
+    `start` is when the episode began, as the detector saw it; `seen_at` is a moment it
+    was known to be still going on. Kept across restarts so that a replay of history,
+    which can begin partway through the episode, can tell it is the same one.
+    """
+
+    check: str  # N1, N2 or S2
+    severity: str
+    start: float
+    seen_at: float
 
 
 @dataclass(frozen=True)
@@ -264,11 +279,43 @@ class DeviceDetector:
                         f"{self.cfg.name}: above 90% of the plug's {r:.0f} W rating "
                         f"for {now - since:.0f} s", {"offer": ["cut_power", "will_check"]})]
 
-    # ---- S2 always-on load stopped drawing ------------------------------------------
+    # ---- across restarts ------------------------------------------------------
 
-    def rearm_s2(self) -> None:
-        """Forget an S2 raised while replaying history, so a load still stopped is reported."""
-        self._s2_fired = False
+    def reported(self, now: float) -> list[Reported]:
+        """What was raised for the episodes going on at `now`."""
+        out: list[Reported] = []
+        cur = self.seg.current if self.seg is not None else None
+        if cur is not None:
+            check = "N1" if cur.state == RUN else "N2"
+            out += [Reported(check, sev, cur.start, now)
+                    for (start, sev) in self._seg_fired if start == cur.start]
+        if self._s2_fired and self._s2_since is not None:
+            out.append(Reported("S2", "", self._s2_since, now))
+        return out
+
+    def resume(self, reported: list[Reported]) -> None:
+        """After a silent replay: only what was really reported counts as reported.
+
+        The replay marks everything it saw as raised. For the episodes still going on,
+        swap those marks for `reported`, so a problem that is still there but that
+        nobody was told about (or whose alarm was lost) is raised again, and one that
+        was already raised or answered is not.
+        """
+        cur = self.seg.current if self.seg is not None else None
+        if cur is not None:
+            for key in [k for k in self._seg_fired if k[0] == cur.start]:
+                del self._seg_fired[key]
+            check = "N1" if cur.state == RUN else "N2"
+            for r in reported:
+                if r.check == check and _same_episode(cur, r):
+                    self._seg_fired[(cur.start, r.severity)] = Severity(r.severity)
+                    if r.severity == Severity.ALARM.value and check == "N1":
+                        self._seg_fired[(cur.start, Severity.NOTICE.value)] = Severity.ALARM
+        since = self._s2_since
+        self._s2_fired = since is not None and any(
+            r.check == "S2" and r.start <= since <= r.seen_at for r in reported)
+
+    # ---- S2 always-on load stopped drawing ------------------------------------------
 
     def _s2_limit(self) -> float | None:
         if self.floor_w is None or self.cfg.profile != Profile.ALWAYS_ON:
@@ -301,7 +348,8 @@ class DeviceDetector:
                         f"{self.cfg.name}: stopped drawing power {(now - since) / 60:.0f} min ago "
                         f"(normally at least {self.floor_w:.0f} W)"
                         + (" although its plug is on" if self.relay_on else ""),
-                        {"floor_w": self.floor_w, "offer": ["will_check", "off_on_purpose"]})]
+                        {"floor_w": self.floor_w, "since": since,
+                         "offer": ["will_check", "off_on_purpose"]})]
 
     # ---- A5 came back off after a dropout --------------------------------------
 
@@ -442,3 +490,16 @@ class DeviceDetector:
                         f"(longest normal pause {m.max_pause_s / 60:.0f} min)",
                         {"pause_start": cur.start, "duration_s": dur,
                          "offer": ["off_on_purpose", "will_check", "turn_back_on"]})]
+
+
+def _same_episode(cur: Segment, r: Reported) -> bool:
+    """Is the open segment the episode `r` was raised for?
+
+    A replay that begins partway through an episode opens it at its first reading
+    (FIRST), later than where the live detector saw it begin. It is still the same
+    episode if the two overlap: the replay's segment has no change in it, and the
+    reported one was still going on after the replay's began.
+    """
+    if cur.start == r.start:
+        return True
+    return cur.start_reason == FIRST and r.start <= cur.start <= r.seen_at

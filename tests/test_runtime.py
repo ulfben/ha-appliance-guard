@@ -465,3 +465,92 @@ async def test_always_on_learns_its_minimum_power(hass: HomeAssistant, monkeypat
     assert 65 <= float(hass.states.get("sensor.network_guard_normal_minimum_power").state) <= 72
     assert hass.states.get("sensor.network_guard_status").state == "ok"
     assert _issues(hass) == []
+
+
+# ---- across reloads and restarts -------------------------------------------------
+
+async def _reload(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_an_open_alarm_survives_a_reload_without_calling_the_phone_again(
+        hass: HomeAssistant, setup):
+    entry, notify = setup
+    hass.states.async_set(POWER, "3302")
+    await hass.async_block_till_done()
+    before = [i.issue_id for i in _issues(hass)]
+    assert len(before) == 1 and len(notify) == 1
+
+    await _reload(hass, entry)
+    assert [i.issue_id for i in _issues(hass)] == before
+    assert len(notify) == 1
+    assert hass.states.get("sensor.kettle_guard_status").state == "alarm"
+
+    fid = next(iter(entry.runtime_data.findings))
+    await entry.runtime_data.async_respond(fid, "will_check")
+    await _reload(hass, entry)
+    assert _issues(hass) == []
+
+
+@pytest.fixture
+async def dead_freezer(hass: HomeAssistant, monkeypatch):
+    """A freezer that cycled normally, then stopped starting 5 h ago."""
+    from test_resume import H, _history
+
+    from custom_components.appliance_guard import watcher as watcher_module
+
+    now = dt_util.utcnow().timestamp()
+    readings = _history(now - 5 * H) + [(now - 4 * H, 2.0), (now - 3 * H, 1.0)]
+
+    async def fake_load(_hass, _entity, _days):
+        return readings
+
+    monkeypatch.setattr(watcher_module, "async_load_readings", fake_load)
+    hass.states.async_set(POWER, "1", {"device_class": "power", "unit_of_measurement": "W"})
+    notify = async_mock_service(hass, "notify", "mobile_app_phone")
+    entry = MockConfigEntry(domain=DOMAIN, title="Freezer", data={CONF_POWER_ENTITY: POWER},
+                            options={CONF_NAME: "Freezer", CONF_PROFILE: "cycling",
+                                     CONF_CRITICAL: True, CONF_NOTIFY: ["mobile_app_phone"]},
+                            unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    return entry, notify
+
+
+async def test_a_dead_freezer_stays_alarmed_across_reloads(hass: HomeAssistant, dead_freezer):
+    entry, notify = dead_freezer
+    issues = _issues(hass)
+    assert len(issues) == 1 and issues[0].translation_placeholders["check"] == "not starting"
+    assert len(notify) == 1
+
+    await _reload(hass, entry)
+    await _reload(hass, entry)
+    assert [i.issue_id for i in _issues(hass)] == [issues[0].issue_id]
+    assert len(notify) == 1
+    assert hass.states.get("sensor.freezer_guard_status").state == "alarm"
+
+
+async def test_an_answered_alarm_is_not_raised_again_after_a_reload(
+        hass: HomeAssistant, dead_freezer):
+    entry, notify = dead_freezer
+    fid = next(iter(entry.runtime_data.findings))
+    await entry.runtime_data.async_respond(fid, "will_check")
+    assert _issues(hass) == []
+
+    await _reload(hass, entry)
+    assert _issues(hass) == []
+    assert len(notify) == 1
+
+
+async def test_ha_stopping_saves_what_was_raised(
+        hass: HomeAssistant, dead_freezer, hass_storage, freezer):
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    entry, _ = dead_freezer
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await _tick_later(hass, freezer, 5)
+    stored = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"]
+    assert [f["check"] for f in stored["findings"].values()] == ["N2"]
+    assert [(r["check"], r["severity"]) for r in stored["reported"]] == [("N2", "alarm")]
