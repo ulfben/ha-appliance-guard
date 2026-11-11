@@ -32,6 +32,7 @@ from .const import (
     ALARM_REPEATS,
     COMMAND_WINDOW_S,
     CONF_CRITICAL,
+    CONF_HA_ONLY,
     CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
@@ -53,7 +54,6 @@ from .const import (
     NEEDS_RELAY,
     OFF_ON_PURPOSE_RUNS,
     R_CUT_POWER,
-    R_NEW_NORMAL,
     R_OFF_ON_PURPOSE,
     R_SNOOZE_1H,
     R_SNOOZE_24H,
@@ -89,9 +89,7 @@ CHECK_TITLES = {
     "A2": "plug switched itself off",
     "A3": "failed starts",
     "A5": "plug came back off after a dropout",
-    "N1": "running far longer than normal",
     "N2": "not starting",
-    "N4": "drawing more than usual between runs",
     "N5": "switched off from Home Assistant",
     "S2": "stopped drawing power",
 }
@@ -103,7 +101,7 @@ KEEP_ON_DELAY_S = 10  # lets an overload reading that raced the relay arrive fir
 STORE_VERSION = 1
 SAVE_DELAY_S = 1
 # Where each check keeps the start of the episode it is about.
-EPISODE_START = {"N1": "run_start", "N2": "pause_start", "S2": "since"}
+EPISODE_START = {"N2": "pause_start", "S2": "since"}
 LEARN_RETRY_H = 1  # while there is nothing learned yet
 
 
@@ -116,14 +114,17 @@ class Watcher:
         o = {**entry.data, **entry.options}
         self.power_entity: str = o[CONF_POWER_ENTITY]
         self.relay_entity: str | None = o.get(CONF_RELAY_ENTITY) or None
+        critical = bool(o.get(CONF_CRITICAL, False))
         self.cfg = DeviceConfig(
             name=o[CONF_NAME],
             profile=Profile(o[CONF_PROFILE]),
             rating_w=float(o[CONF_RATING_W]) if o.get(CONF_RATING_W) else None,
-            critical=bool(o.get(CONF_CRITICAL, False)),
+            critical=critical,
+            ha_only=bool(o.get(CONF_HA_ONLY, critical)) and self.relay_entity is not None,
         )
         self.notify_targets: list[str] = list(o.get(CONF_NOTIFY) or [])
-        self.keep_on = bool(o.get(CONF_KEEP_ON, False)) and self.relay_entity is not None
+        # Turning a plug back on is only safe where nobody else switches it off.
+        self.keep_on = bool(o.get(CONF_KEEP_ON, False)) and self.cfg.ha_only
         self._keep_on_tries: deque[float] = deque()
         self._last_a1: float | None = None
         self.model: Model | None = None
@@ -314,26 +315,6 @@ class Watcher:
             self.learn_note = str(err)
         _LOGGER.debug("%s learned: %s %s (%s)", self.cfg.name, self.model, self.floor_w,
                       self.learn_note)
-
-    def _widen(self, f: Finding | None) -> None:
-        """'This is normal for it': allow what the finding was about from now on."""
-        m = self.model
-        if f is None or m is None:
-            return
-        seg = self.detector.seg
-        cur = seg.current if seg is not None else None
-        ongoing = (seg.known_duration(time.time())
-                   if cur is not None and cur.start == f.data.get(EPISODE_START.get(f.check))
-                   else 0.0)
-        dur = max(float(f.data.get("duration_s", 0.0)), ongoing)
-        if f.check == "N1":
-            m = replace(m, max_run_s=max(m.max_run_s, dur), p99_run_s=max(m.p99_run_s, dur))
-        elif f.check == "N2":
-            m = replace(m, max_pause_s=max(m.max_pause_s, dur),
-                        p99_pause_s=max(m.p99_pause_s, dur))
-        elif f.check == "N4" and "watts" in f.data:
-            m = replace(m, pause_level_p90=max(m.pause_level_p90, float(f.data["watts"])))
-        self.model = self.detector.model = m
 
     def _seed_relay(self, det: DeviceDetector, states: list[tuple[float, str]],
                     stops: list[float]) -> list[Finding]:
@@ -563,8 +544,6 @@ class Watcher:
             # A different appliance: what was learned is about the old one.
             self.learn_from = now
             await self.async_relearn(fresh=True)
-        elif response == R_NEW_NORMAL:
-            self._widen(f)
         elif response == R_SNOOZE_1H:
             self.snooze_until = now + 3600
         elif response == R_SNOOZE_24H:
@@ -690,8 +669,7 @@ class Watcher:
 
 RESPONSE_TITLES = {
     "off_on_purpose": "Off on purpose",
-    "something_new": "Something new",
-    "new_normal": "New normal",
+    "something_new": "Different appliance",
     "one_off": "One-off, fine",
     "will_check": "I'll check",
     "snooze_1h": "Snooze 1 h",

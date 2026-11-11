@@ -1,6 +1,7 @@
 """Reference cases R1-R12 (docs/DESIGN.md section 2) replayed through the detector."""
 
 import random
+from dataclasses import replace
 
 import pytest
 from replay import at, between, ha_stops, local, raw, relay, run
@@ -49,8 +50,7 @@ def test_r12_normal_starts_raise_no_failed_start(alias):
 # (~45 W) it is normal 28-min runs at ~111 W (89 W + 22 W) with 22 W in every
 # pause: the two IKEA light drivers on the same extension cord. Each episode
 # starts within a second of light.dimmable_light_7 turning on (confirmed by the
-# user). Until shared loads are implemented, N4 raises a notice for each; with
-# the light linked, these must go quiet (test to be added with shared loads).
+# user). The fridge was fine, and nothing is raised for it.
 
 
 def test_r4_shared_load_episodes_start_when_the_light_turns_on():
@@ -65,33 +65,11 @@ def test_r4_shared_load_episodes_start_when_the_light_turns_on():
         # The lights fade in (9 W, then 22 W); the pause level settles at ~22 W.
         assert after and 18 <= after[-1] <= 26, after
 
-def test_r4_elevated_draw_between_runs_is_a_notice_not_a_long_run():
+def test_r4_a_shared_load_raises_nothing():
     readings = raw("bsmnt_fridge")
     model = learn_cycling(between(readings, 0, at("2026-11-04 15:00")))
-    det = DeviceDetector(FRIDGE, model)
-    found = run(det, readings)
-    assert [f for f in found if f.check == "N1"] == [], _checks(found)
-    n4 = [f for f in found if f.check == "N4"]
-    assert all(f.severity == Severity.NOTICE for f in n4)
-    on_4_nov = [f for f in n4 if at("2026-11-04 17:36") <= f.ts <= at("2026-11-04 18:00")]
-    assert len(on_4_nov) == 1, _checks(n4)
-    # 1 Nov ~10:38 and 3 Nov ~16:26 show the same pattern (22 W between runs,
-    # ~110 W runs); nothing else in the 10 days does.
-    assert [local(f.ts)[:13] for f in n4] == [
-        "2026-11-01 10", "2026-11-03 16", "2026-11-04 17"], _checks(n4)
-
-
-def test_n1_a_run_that_never_stops_alarms():
-    readings = between(raw("bsmnt_fridge"), 0, at("2026-11-04 00:00"))
-    model = learn_cycling(readings)
-    det = DeviceDetector(FRIDGE, model)
-    run(det, readings)
-    t0 = readings[-1][0] + 60
-    stuck = [(t0 + 300 * i, 90.0 + (i % 3)) for i in range(60)]  # 5 h at running level
-    found = [f for f in run(det, stuck) if f.check == "N1"]
-    assert [f.severity for f in found] == [Severity.NOTICE, Severity.ALARM], _checks(found)
-    assert found[0].ts - t0 <= 2 * 3600
-    assert found[1].ts - t0 <= 3 * model.max_run_s + 600
+    found = run(DeviceDetector(FRIDGE, model), readings)
+    assert [f for f in found if f.check != "A3"] == [], _checks(found)
 
 
 # ---- R10 / N2: missing data is never a dead fridge ---------------------------
@@ -114,10 +92,10 @@ def test_n2_freezer_that_stops_starting_alarms_within_40_min():
     det = DeviceDetector(DeviceConfig("Freezer", Profile.CYCLING, critical=True), model)
     found = [f for f in run(det, dead) if f.check == "N2"]
     assert len(found) == 1 and found[0].severity == Severity.ALARM
-    assert found[0].ts - cut <= 40 * 60 + model.max_run_s
+    assert found[0].ts - cut <= 40 * 60 + 250 * 60  # its longest runs are ~4 h
 
 
-# ---- N2 for demand-driven appliances: a dry night is not a dead dehumidifier ---
+# ---- N2 is for critical appliances only: a dry night is not a dead dehumidifier ---
 
 def _dehumidifier_night():
     """Model learned from the reference days, and the real night of 2026-11-09.
@@ -130,26 +108,15 @@ def _dehumidifier_night():
     return model, raw("dehumidifier_dry_night")
 
 
-def test_n2_dry_night_with_fan_samples_is_quiet():
+def test_n2_not_for_appliances_that_run_on_demand():
     model, night = _dehumidifier_night()
+    dead = [(ts, w if w is None else min(w, 1.0)) for ts, w in night]
     det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING), model)
-    found = [f for f in run(det, night) if f.check == "N2"]
+    found = [f for f in run(det, dead) if f.check == "N2"]
     assert found == [], _checks(found)
 
 
-def test_n2_dehumidifier_flat_at_idle_still_gets_a_notice():
-    model, night = _dehumidifier_night()
-    cut = at("2026-11-09 21:10")
-    dead = [(ts, w if ts < cut or w is None else min(w, 1.0)) for ts, w in night]
-    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING), model)
-    found = [f for f in run(det, dead) if f.check == "N2"]
-    assert len(found) == 1 and found[0].severity == Severity.NOTICE, _checks(found)
-    assert "no sign of life" in found[0].summary
-    limit = max(1.5 * model.max_pause_s, 1800)
-    assert found[0].ts - cut <= limit + 600
-
-
-def test_n2_critical_appliance_ignores_signs_of_life():
+def test_n2_critical_appliance_alarms_on_a_long_pause():
     model, night = _dehumidifier_night()
     det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING, critical=True), model)
     found = [f for f in run(det, night) if f.check == "N2"]
@@ -219,12 +186,19 @@ def test_impossible_readings_are_dropped():
 # ---- R2 / A2: relay switched off by itself -----------------------------------
 
 def test_a2_relay_off_without_ha_command_alarms():
-    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING))
+    det = DeviceDetector(DeviceConfig("Dehumidifier", Profile.CYCLING, ha_only=True))
     assert det.feed_relay(0, True, commanded=False) == []
     assert det.feed_relay(10, False, commanded=True) == []  # an automation / Fuse Guard
     assert det.feed_relay(20, True, commanded=True) == []
     found = det.feed_relay(30, False, commanded=False)  # overload protection tripped
     assert [(f.check, f.severity) for f in found] == [("A2", Severity.ALARM)]
+
+
+def test_a2_only_where_home_assistant_is_the_only_switch():
+    """A button press or the vendor app also switches the relay without HA."""
+    det = DeviceDetector(DeviceConfig("3D printer", Profile.ON_DEMAND))
+    det.feed_relay(0, True, commanded=False)
+    assert det.feed_relay(30, False, commanded=False) == []
 
 
 def test_a2_reference_relays_had_no_self_switch_offs():
@@ -364,7 +338,7 @@ def test_s2_real_always_on_history_raises_nothing(alias):
 
 
 def _network(**kw):
-    return DeviceDetector(kw.pop("cfg", NETWORK), floor_w=70.0)
+    return DeviceDetector(kw.pop("cfg", replace(NETWORK, ha_only=True)), floor_w=70.0)
 
 
 def test_s2_load_that_stops_drawing_alarms_once_after_5_min():

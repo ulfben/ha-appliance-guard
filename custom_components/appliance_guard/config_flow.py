@@ -24,6 +24,7 @@ from homeassistant.util import slugify
 
 from .const import (
     CONF_CRITICAL,
+    CONF_HA_ONLY,
     CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
@@ -127,6 +128,8 @@ def details_schema(hass: HomeAssistant, d: dict[str, Any]) -> vol.Schema:
                                           unit_of_measurement=UnitOfPower.WATT,
                                           mode=selector.NumberSelectorMode.BOX)),
         vol.Required(CONF_CRITICAL, default=bool(d.get(CONF_CRITICAL))): bool,
+        vol.Required(CONF_HA_ONLY,
+                     default=bool(d.get(CONF_HA_ONLY, d.get(CONF_CRITICAL)))): bool,
         vol.Required(CONF_KEEP_ON, default=bool(d.get(CONF_KEEP_ON))): bool,
         vol.Optional(CONF_RELAY_ENTITY, **relay): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")),
@@ -205,6 +208,7 @@ class GuardConfigFlow(ConfigFlow, domain=DOMAIN):
         d, _ = self._found[power]
         return {CONF_NAME: d[CONF_NAME], CONF_PROFILE: d[CONF_PROFILE],
                 CONF_RATING_W: d[CONF_RATING_W], CONF_CRITICAL: d[CONF_CRITICAL],
+                CONF_HA_ONLY: d[CONF_CRITICAL],
                 CONF_RELAY_ENTITY: d[CONF_RELAY_ENTITY], CONF_NOTIFY: notify}
 
     async def async_step_integration_discovery(self, discovery_info: dict[str, Any]

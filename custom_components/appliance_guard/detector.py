@@ -1,11 +1,11 @@
 """Per-device checks: a reading stream goes in, findings come out.
 
-Implemented (DESIGN.md section 6): A1 plug rating, A2 relay off by itself,
-A3 failed starts, A5 back off after a dropout, N1 long run, N2 dead device,
-N4 elevated draw between runs, N5 a critical always-on plug switched off from HA,
-S2 an always-on load stopped drawing.
-A4, N3, S1, the upper half of S2 and the household checks come later. Pure Python, no Home Assistant
-imports.
+Plug checks, no learning: A1 over the plug's rating, A2 relay off by itself (only
+where Home Assistant is the only thing that switches the plug), A5 came back off after
+a dropout, N5 a critical always-on plug switched off from HA.
+Appliance checks, learned: A3 failed starts (cycling), N2 not starting (critical
+cycling appliances: fridges, freezers), S2 an always-on load stopped drawing.
+Pure Python, no Home Assistant imports.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class Reported:
     which can begin partway through the episode, can tell it is the same one.
     """
 
-    check: str  # N1, N2 or S2
+    check: str  # N2 or S2
     severity: str
     start: float
     seen_at: float
@@ -68,6 +68,9 @@ class DeviceConfig:
     profile: Profile
     rating_w: float | None = None
     critical: bool = False
+    # Nothing but Home Assistant switches the plug (no button presses, vendor app or
+    # voice assistant), so a relay that goes off by itself is a fault (A2).
+    ha_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,19 +86,8 @@ class Limits:
     a3_window_s: float = 1800.0
     a3_alarm_count: int = 3
     a3_recover_s: float = 900.0
-    n1_factor: float = 1.5
-    n1_margin_s: float = 2700.0
-    n1_alarm_factor: float = 3.0
-    n1_elevated: float = 1.2
-    n1_elevated_after_s: float = 7200.0
     n2_factor: float = 1.5
     n2_floor_s: float = 1800.0
-    # Above idle by this much counts as a sign of life between runs: a dehumidifier's fan
-    # sampling the air, a display. Non-critical appliances only get N2 when none is seen.
-    n2_life_w: float = 5.0
-    n4_margin_w: float = 10.0  # above the learned between-runs level
-    n4_hold_s: float = 900.0
-    n4_cooldown_s: float = 6 * 3600.0
     # Plugs and HA take a while to settle after a power cut, and "off" is rarely urgent.
     a5_grace_s: float = 300.0
     # S2: below this share of the learned floor for this long, with the relay on.
@@ -128,11 +120,8 @@ class DeviceDetector:
         self._failed: list[float] = []
         self._a3_alarmed = False
         self._a3_pending: float | None = None  # first failed start awaiting a normal run
-        # N1 / N2: one finding per severity per segment
+        # N2: one finding per pause
         self._seg_fired: dict[tuple[float, str], Severity] = {}
-        # N4
-        self._n4_since: float | None = None
-        self._n4_last: float | None = None
         # S2
         self._s2_since: float | None = None
         self._s2_fired = False
@@ -152,7 +141,6 @@ class DeviceDetector:
             for closed in self.seg.feed(ts, watts):
                 out += self._on_closed(closed)
             out += self._a3_recovered(ts)
-            self._n4_track(ts, watts)
         out += self.tick(ts)
         return out
 
@@ -173,7 +161,7 @@ class DeviceDetector:
         self.relay_on = on
         if on is False:
             self.relay_off_commanded = commanded
-            if was is True and not commanded:
+            if was is True and not commanded and self.cfg.ha_only:
                 out.append(Finding("A2", Severity.ALARM, ts,
                                    f"{self.cfg.name}: the plug switched itself off "
                                    "(overload protection, its button, or a power cut)",
@@ -222,12 +210,8 @@ class DeviceDetector:
         cur = self.seg.current
         if cur is None or not self.seg.is_known:
             return out
-        dur = self.seg.known_duration(now)
-        if cur.state == RUN:
-            out += self._n1(now, cur, dur)
-        elif cur.state == IDLE and self.relay_on is not False:
-            out += self._n2(now, cur, dur)
-            out += self._n4(now)
+        if cur.state == IDLE and self.relay_on is not False and self.cfg.critical:
+            out += self._n2(now, cur, self.seg.known_duration(now))
         return out
 
     # ---- helpers ------------------------------------------------------------
@@ -285,9 +269,8 @@ class DeviceDetector:
         """What was raised for the episodes going on at `now`."""
         out: list[Reported] = []
         cur = self.seg.current if self.seg is not None else None
-        if cur is not None:
-            check = "N1" if cur.state == RUN else "N2"
-            out += [Reported(check, sev, cur.start, now)
+        if cur is not None and cur.state == IDLE:
+            out += [Reported("N2", sev, cur.start, now)
                     for (start, sev) in self._seg_fired if start == cur.start]
         if self._s2_fired and self._s2_since is not None:
             out.append(Reported("S2", "", self._s2_since, now))
@@ -305,12 +288,9 @@ class DeviceDetector:
         if cur is not None:
             for key in [k for k in self._seg_fired if k[0] == cur.start]:
                 del self._seg_fired[key]
-            check = "N1" if cur.state == RUN else "N2"
             for r in reported:
-                if r.check == check and _same_episode(cur, r):
+                if r.check == "N2" and cur.state == IDLE and _same_episode(cur, r):
                     self._seg_fired[(cur.start, r.severity)] = Severity(r.severity)
-                    if r.severity == Severity.ALARM.value and check == "N1":
-                        self._seg_fired[(cur.start, Severity.NOTICE.value)] = Severity.ALARM
         since = self._s2_since
         self._s2_fired = since is not None and any(
             r.check == "S2" and r.start <= since <= r.seen_at for r in reported)
@@ -419,74 +399,20 @@ class DeviceDetector:
             self._failed = []
         return out
 
-    # ---- N1 long run / N2 dead device ---------------------------------------
-
-    def _n1(self, now: float, cur: Segment, dur: float) -> list[Finding]:
-        m, lim = self.model, self.lim
-        notice_at = max(lim.n1_factor * m.max_run_s, m.p99_run_s + lim.n1_margin_s)
-        elevated = cur.median_w > lim.n1_elevated * m.run_w
-        alarm = dur >= lim.n1_alarm_factor * m.max_run_s or (
-            elevated and dur >= max(notice_at, lim.n1_elevated_after_s))
-        sev = Severity.ALARM if alarm else Severity.NOTICE if dur >= notice_at else None
-        if sev is None or not self._once(cur, sev):
-            return []
-        if sev == Severity.ALARM:
-            self._seg_fired[(cur.start, Severity.NOTICE.value)] = sev
-        return [Finding("N1", sev, now,
-                        f"{self.cfg.name}: running for {dur / 60:.0f} min at "
-                        f"{cur.median_w:.0f} W (longest normal run {m.max_run_s / 60:.0f} min "
-                        f"at {m.run_w:.0f} W)",
-                        {"run_start": cur.start, "duration_s": dur, "median_w": cur.median_w,
-                         "offer": ["will_check", "new_normal", "something_new", "one_off"]})]
-
-    def _n4_limit(self) -> float:
-        m = self.model
-        return max(m.pause_level_p90, m.idle_w) + self.lim.n4_margin_w
-
-    def _n4_track(self, ts: float, watts: float | None) -> None:
-        cur = self.seg.current
-        if watts is None:
-            return  # unknown: keep the current state, don't count the gap below
-        if cur is not None and cur.state == IDLE and watts >= self._n4_limit():
-            self._n4_since = self._n4_since or ts
-        else:
-            self._n4_since = None
-
-    def _n4(self, now: float) -> list[Finding]:
-        """Drawing clearly more than usual between runs: a light on, door ajar."""
-        since = self._n4_since
-        if since is None or now - since < self.lim.n4_hold_s:
-            return []
-        if self._n4_last is not None and now - self._n4_last < self.lim.n4_cooldown_s:
-            return []
-        self._n4_last = now
-        w = self.seg.current.samples[-1][1]
-        return [Finding("N4", Severity.NOTICE, now,
-                        f"{self.cfg.name}: drawing {w:.0f} W between runs for "
-                        f"{(now - since) / 60:.0f} min (normally ~{self.model.pause_level_p90:.0f}"
-                        " W). A door ajar or a light left on?",
-                        {"since": since, "watts": w,
-                         "offer": ["will_check", "one_off", "new_normal"]})]
+    # ---- N2 not starting ----------------------------------------------------
 
     def _n2(self, now: float, cur: Segment, dur: float) -> list[Finding]:
+        """A fridge or freezer must keep starting. Only for critical appliances: one
+        that runs on demand (a dehumidifier in dry air) can rightly rest for hours."""
         m, lim = self.model, self.lim
         limit = max(lim.n2_factor * m.max_pause_s, lim.n2_floor_s)
-        if self.cfg.critical:
-            # A fridge or freezer must keep starting, whatever the weather.
-            quiet, what = dur, "no start"
-        else:
-            # Demand-driven (a dehumidifier in dry air): a long pause is normal as long as
-            # it shows signs of life. Count only the time since the last one.
-            life = [t for t, w in cur.samples if w >= m.idle_w + lim.n2_life_w]
-            quiet = min(dur, now - life[-1]) if life else dur
-            what = "no start and no sign of life"
-        if quiet < limit:
+        if dur < limit:
             return []
-        sev = Severity.ALARM if self.cfg.critical else Severity.NOTICE
+        sev = Severity.ALARM
         if not self._once(cur, sev):
             return []
         return [Finding("N2", sev, now,
-                        f"{self.cfg.name}: {what} for {quiet / 60:.0f} min "
+                        f"{self.cfg.name}: no start for {dur / 60:.0f} min "
                         f"(longest normal pause {m.max_pause_s / 60:.0f} min)",
                         {"pause_start": cur.start, "duration_s": dur,
                          "offer": ["off_on_purpose", "will_check", "turn_back_on",

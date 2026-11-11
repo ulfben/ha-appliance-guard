@@ -85,14 +85,19 @@ and its history. Then open **Configure** on each one and check:
 - **Type of appliance:** *cycling* (fridge, freezer, dehumidifier),
   *always on* (network gear, servers) or *on demand* (everything used now
   and then). Cycling and always-on appliances get extra checks, below.
-- **Critical:** for a fridge, freezer or the network. For a cycling
-  appliance, a long pause becomes an alarm. Leave it off for appliances that
-  only run when needed, such as a dehumidifier: then a long pause is fine as
-  long as the appliance shows signs of life, like its fan sampling the air.
-  For an always-on appliance, stopping is an alarm, and switching it off
-  from Home Assistant gives a notice.
-- **Keep powered:** turns the plug back on by itself when it switches itself
-  off or comes back off after a power cut, and tells you. It never does so
+- **Critical:** for a fridge, freezer or the network. A cycling appliance is
+  then watched for not starting. Leave it off for appliances that only run
+  when needed, such as a dehumidifier, which can rightly rest for hours; they
+  are still watched for failed starts. For an always-on appliance, stopping is
+  an alarm, and switching it off from Home Assistant gives a notice.
+- **Only Home Assistant switches this plug:** then the plug switching off by
+  itself is an alarm. Leave it off if the plug is also switched by its button,
+  its own app or a voice assistant, since each of those would look the same.
+  On by default for critical plugs: while the relay is off, a fridge isn't
+  watched for not starting, so this is what catches its plug tripping.
+- **Keep powered:** needs the setting above. Turns the plug back on by itself
+  when it switches itself off or comes back off after a power cut, and tells
+  you. It never does so
   right after the plug was over its rating, and gives up after 3 tries in an
   hour. Worth it for network gear: while the network is down, the alarm
   can't reach your phone anyway.
@@ -116,7 +121,7 @@ also get the alarm described below.
 | Alert | When |
 |---|---|
 | **Over the plug's rating** | Above the rating, or above 90 % of it for a minute. Needs the rating |
-| **Plug switched itself off** | The relay went off without Home Assistant switching it: the plug's overload protection, its button, or a power cut. Needs the relay |
+| **Plug switched itself off** | The relay went off without Home Assistant switching it: the plug's overload protection, or a power cut. Needs the relay, and **Only Home Assistant switches this plug** |
 | **Plug came back off after a dropout** | The plug lost contact (a power cut, or Home Assistant restarting) and was still off 5 minutes after it came back. Needs the relay |
 
 **For cycling appliances** (fridges, freezers, dehumidifiers), from what it
@@ -125,9 +130,7 @@ learned about this appliance's runs and pauses:
 | Alert | When |
 |---|---|
 | **Failed starts** | Repeated short bursts of high draw that never settle into a normal run: a compressor that can't start |
-| **Not starting** | No start for half again as long as the longest normal pause. For critical appliances, an alarm. For others, a notice, and only if it also shows no sign of life (nothing drawn above idle, such as a fan) for that long |
-| **Running far longer than normal** | A run much longer than any it has learned |
-| **Drawing more than usual between runs** | A higher draw than usual between runs for 15 minutes: a door ajar, or a light left on |
+| **Not starting** | Critical ones only (fridges, freezers): no start for half again as long as the longest normal pause, at least 30 minutes. An alarm |
 
 **For always-on appliances** (network gear, servers):
 
@@ -150,7 +153,6 @@ alert:
 |---|---|
 | It's off on purpose | No "not starting", "stopped drawing" or "came back off" alerts until the appliance runs again |
 | A different appliance is plugged in | Forgets what it learned and learns the new appliance from now on (status `learning` until it has seen about 20 runs) |
-| This is normal for it | Allows this run, pause or level from now on |
 | One-off, it's fine / I'll check it | Closes the alert |
 | Snooze 1 hour / 24 hours | No notices for this plug for that long |
 | Cut power | Switches the plug off and marks it off on purpose |
@@ -167,7 +169,7 @@ Each watched plug gets a device, "*name* guard", with:
 | Finding | An event for each alert and answer, for your own automations |
 | Mode | **Watching**; **Off on purpose**; **Paused** (only safety alarms come through); **Disabled**. Set it ahead of time: "the basement fridge goes off tomorrow" |
 | Relearn | Learns again from the last 10 days, replacing what it kept |
-| Normal running power, Normal power between runs, Longest normal run, Longest normal pause | What it learned (cycling appliances) |
+| Normal running power, Longest normal pause | What it learned (cycling appliances; the pause only for critical ones) |
 | Normal minimum power | What it learned (always-on appliances) |
 | After a dropout | What the plug did after losing contact: `not_seen`, `came_back_on` or `came_back_off`. "Came back off" sticks once seen |
 
@@ -175,11 +177,12 @@ Each watched plug gets a device, "*name* guard", with:
 
 - It watches each plug on its own. Several plugs on one power strip, or one
   fuse, aren't added up.
-- A heater stuck on at its normal power looks normal. Only cycling
-  appliances get the "running far longer than normal" check.
+- A heater stuck on at its normal power looks normal, and so does a fridge
+  that runs without stopping or a door left ajar: runs that are too long and
+  extra draw between runs vary too much for real fridges to alert on reliably.
 - What it learned is kept until you answer an alert or press **Relearn**.
-  Learning leaves out time the plug was switched off and the odd run or pause
-  far longer than the rest (a stall, a day unplugged), but a fault already
+  Learning leaves out time the plug was switched off and the odd pause far
+  longer than the rest (a day unplugged), but a fault already
   going on for most of the last 10 days at setup is learned as normal.
 
 ## Development

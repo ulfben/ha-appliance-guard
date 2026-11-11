@@ -21,6 +21,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.appliance_guard.const import (
     CONF_CRITICAL,
+    CONF_HA_ONLY,
     CONF_KEEP_ON,
     CONF_NAME,
     CONF_NOTIFY,
@@ -40,6 +41,7 @@ OPTIONS = {
     CONF_PROFILE: "on_demand",
     CONF_RATING_W: 2500,
     CONF_CRITICAL: False,
+    CONF_HA_ONLY: True,
     CONF_RELAY_ENTITY: RELAY,
     CONF_NOTIFY: ["mobile_app_phone"],
 }
@@ -360,7 +362,10 @@ async def test_setup_offers_found_plugs_and_ticks_the_ones_worth_watching(
     assert set(entries) == {"Basement fridge", "Desk lamp"}
     f = entries["Basement fridge"].options
     assert f[CONF_PROFILE] == "cycling" and f[CONF_CRITICAL] is True
-    assert f[CONF_RATING_W] == 3680 and f[CONF_RELAY_ENTITY] == "switch.basement_fridge"
+    # TS011F plugs come as 10 A and 16 A: no rating is guessed for them.
+    assert f[CONF_RATING_W] is None and f[CONF_RELAY_ENTITY] == "switch.basement_fridge"
+    assert f[CONF_HA_ONLY] is True  # critical plugs: switching off by itself is an alarm
+    assert entries["Desk lamp"].options[CONF_HA_ONLY] is False
     assert entries["Desk lamp"].options[CONF_PROFILE] == "on_demand"
 
     # Only plugs not yet watched are offered next time.
@@ -595,13 +600,6 @@ async def test_what_was_learned_is_kept_across_reloads(
     assert 95 <= _pause_min(hass) <= 105
 
 
-async def test_new_normal_allows_this_pause_from_now_on(hass: HomeAssistant, dead_freezer):
-    entry, _ = dead_freezer
-    fid = next(iter(entry.runtime_data.findings))
-    await entry.runtime_data.async_respond(fid, "new_normal")
-    assert _pause_min(hass) >= 4 * 60  # the pause had lasted 5 h
-    await _reload(hass, entry)
-    assert _pause_min(hass) >= 4 * 60
 
 
 async def test_a_different_appliance_is_learned_from_now(hass: HomeAssistant, dead_freezer):
@@ -613,3 +611,39 @@ async def test_a_different_appliance_is_learned_from_now(hass: HomeAssistant, de
     await _reload(hass, entry)  # the old history still doesn't count
     assert hass.states.get("sensor.freezer_guard_status").state == "learning"
     assert entry.runtime_data.model is None
+
+
+# ---- only what applies ---------------------------------------------------------
+
+async def test_only_sensors_that_apply_and_old_ones_are_removed(hass: HomeAssistant):
+    hass.states.async_set(POWER, "1", {"device_class": "power", "unit_of_measurement": "W"})
+    hass.states.async_set(RELAY, "on")
+    entry = MockConfigEntry(domain=DOMAIN, title="Kettle", data={CONF_POWER_ENTITY: POWER},
+                            options=OPTIONS, unique_id=POWER)
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    for key in ("longest_run", "longest_pause"):  # left by an earlier version
+        ent_reg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_{key}",
+                                    config_entry=entry)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    keys = {e.unique_id.removeprefix(f"{entry.entry_id}_")
+            for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+            if e.domain == "sensor"}
+    assert keys == {"status", "after_dropout"}  # an on-demand plug learns nothing
+
+
+async def test_keep_powered_needs_ha_to_be_the_only_switch(hass: HomeAssistant):
+    hass.states.async_set(POWER, "70", {"device_class": "power", "unit_of_measurement": "W"})
+    hass.states.async_set(RELAY, "on")
+    entry = MockConfigEntry(domain=DOMAIN, title="Kettle", data={CONF_POWER_ENTITY: POWER},
+                            options={**OPTIONS, CONF_KEEP_ON: True, CONF_HA_ONLY: False},
+                            unique_id=POWER)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set(RELAY, "off", context=Context())  # its button
+    await hass.async_block_till_done()
+    assert entry.runtime_data.keep_on is False
+    assert _issues(hass) == [] and turn_on == []

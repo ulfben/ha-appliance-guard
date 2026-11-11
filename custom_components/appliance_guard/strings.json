@@ -35,6 +35,7 @@
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
           "critical": "Critical: must keep running (fridge, freezer, network)",
+          "ha_only": "Only Home Assistant switches this plug",
           "keep_on": "Keep powered",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
@@ -43,8 +44,9 @@
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
-          "critical": "Cycling: a long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
-          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
+          "critical": "Cycling (fridge, freezer): not starting for much longer than its longest normal pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier; they are still watched for failed starts. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
+          "ha_only": "Then the plug switching off by itself is an alarm (overload protection, a power cut). Leave off if the plug is also switched by its button, its own app or a voice assistant: each of those would raise a false alarm. Needed for Keep powered.",
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs 'Only Home Assistant switches this plug'. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     },
@@ -67,6 +69,7 @@
           "profile": "Type of appliance",
           "rating_w": "Plug rating",
           "critical": "Critical: must keep running (fridge, freezer, network)",
+          "ha_only": "Only Home Assistant switches this plug",
           "keep_on": "Keep powered",
           "relay_entity": "Plug relay switch",
           "notify_targets": "Phones to notify"
@@ -75,8 +78,9 @@
           "rating_w": "The most the plug is made to switch, per socket, from its label or spec sheet: e.g. 2500 W for a Shelly Plug S. Rated in amps? Multiply by 230: 10 A = 2300 W, 12 A = 2760 W, 16 A = 3680 W. Leave empty to skip the rating check.",
           "relay_entity": "Lets Appliance Guard notice the plug switching itself off or coming back off after a power cut, and offer Cut power / Turn back on.",
           "notify_targets": "Notify services of the HA Companion app. Without any, findings only show under Settings > Repairs.",
-          "critical": "Cycling: a long pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier: a long pause is then fine while it shows signs of life, such as its fan. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
-          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
+          "critical": "Cycling (fridge, freezer): not starting for much longer than its longest normal pause is an alarm. Leave off for appliances that only run when needed, like a dehumidifier; they are still watched for failed starts. Always on: stopping is an alarm, and switching it off from Home Assistant gives a notice.",
+          "ha_only": "Then the plug switching off by itself is an alarm (overload protection, a power cut). Leave off if the plug is also switched by its button, its own app or a voice assistant: each of those would raise a false alarm. Needed for Keep powered.",
+          "keep_on": "Turn the plug back on by itself when it switches itself off or comes back off after a power cut, then tell you. Needs 'Only Home Assistant switches this plug'. Never right after it was over its rating, and at most 3 times an hour. Useful for network gear, whose alarm may not reach you while it is off."
         }
       }
     }
@@ -101,7 +105,6 @@
             "menu_options": {
               "off_on_purpose": "It's off on purpose (watching resumes when it runs again)",
               "something_new": "A different appliance is plugged in (learn it from now)",
-              "new_normal": "This is normal for it (allow it from now on)",
               "one_off": "One-off, it's fine",
               "will_check": "I'll check it",
               "snooze_1h": "Snooze 1 hour",
@@ -133,12 +136,6 @@
       },
       "running_power": {
         "name": "Normal running power"
-      },
-      "between_runs_power": {
-        "name": "Normal power between runs"
-      },
-      "longest_run": {
-        "name": "Longest normal run"
       },
       "longest_pause": {
         "name": "Longest normal pause"

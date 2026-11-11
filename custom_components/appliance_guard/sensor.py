@@ -13,10 +13,13 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import GuardConfigEntry
+from .const import DOMAIN
+from .detector import Profile
 from .entity import GuardEntity
 from .model import Model
 from .watcher import Watcher
@@ -27,25 +30,25 @@ STATUSES = ["ok", "learning", "notice", "alarm", "off_on_purpose", "paused", "di
 @dataclass(frozen=True, kw_only=True)
 class LearnedDescription(SensorEntityDescription):
     value: Callable[[Watcher], float | None]
+    applies: Callable[[Watcher], bool]  # only created where a check uses the value
 
 
 LEARNED = [
     LearnedDescription(key="running_power", device_class=SensorDeviceClass.POWER,
                        native_unit_of_measurement=UnitOfPower.WATT,
-                       value=lambda w: _m(w, lambda m: round(m.run_w, 1))),
-    LearnedDescription(key="between_runs_power", device_class=SensorDeviceClass.POWER,
-                       native_unit_of_measurement=UnitOfPower.WATT,
-                       value=lambda w: _m(w, lambda m: round(m.pause_level_p90, 1))),
-    LearnedDescription(key="longest_run", device_class=SensorDeviceClass.DURATION,
-                       native_unit_of_measurement=UnitOfTime.MINUTES,
-                       value=lambda w: _m(w, lambda m: round(m.max_run_s / 60))),
+                       value=lambda w: _m(w, lambda m: round(m.run_w, 1)),
+                       applies=lambda w: w.cfg.profile == Profile.CYCLING),
     LearnedDescription(key="longest_pause", device_class=SensorDeviceClass.DURATION,
                        native_unit_of_measurement=UnitOfTime.MINUTES,
-                       value=lambda w: _m(w, lambda m: round(m.max_pause_s / 60))),
+                       value=lambda w: _m(w, lambda m: round(m.max_pause_s / 60)),
+                       applies=lambda w: w.cfg.profile == Profile.CYCLING and w.cfg.critical),
     LearnedDescription(key="normal_minimum_power", device_class=SensorDeviceClass.POWER,
                        native_unit_of_measurement=UnitOfPower.WATT,
-                       value=lambda w: round(w.floor_w, 1) if w.floor_w is not None else None),
+                       value=lambda w: round(w.floor_w, 1) if w.floor_w is not None else None,
+                       applies=lambda w: w.cfg.profile == Profile.ALWAYS_ON),
 ]
+# Sensors earlier versions created, or that no longer apply to this plug.
+OLD_KEYS = ["between_runs_power", "longest_run"]
 
 
 def _m(w: Watcher, f: Callable[[Model], float]) -> float | None:
@@ -55,9 +58,15 @@ def _m(w: Watcher, f: Callable[[Model], float]) -> float | None:
 async def async_setup_entry(hass: HomeAssistant, entry: GuardConfigEntry,
                             async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     w = entry.runtime_data
-    entities: list[SensorEntity] = [StatusSensor(w), *(LearnedSensor(w, d) for d in LEARNED)]
+    learned = [d for d in LEARNED if d.applies(w)]
+    entities: list[SensorEntity] = [StatusSensor(w), *(LearnedSensor(w, d) for d in learned)]
     if w.relay_entity:
         entities.append(AfterDropoutSensor(w))
+    ent_reg = er.async_get(hass)
+    gone = OLD_KEYS + [d.key for d in LEARNED if d not in learned]
+    for key in gone + ([] if w.relay_entity else ["after_dropout"]):
+        if eid := ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}"):
+            ent_reg.async_remove(eid)
     async_add_entities(entities)
 
 

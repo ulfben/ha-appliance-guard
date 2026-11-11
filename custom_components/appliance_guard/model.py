@@ -1,9 +1,9 @@
 """Learn a device's normal behaviour from a reading stream.
 
-Learns from raw history only (idle/run levels, run and pause lengths). What is learned
-is kept until the user says otherwise (watcher.py), so it must not take in faults:
-time the plug was switched off is left out, and so are runs and pauses far longer
-than the rest (a stall, a day unplugged).
+Learns from raw history only (idle/run levels, pause lengths, an always-on floor).
+What is learned is kept until the user says otherwise (watcher.py), so it must not take
+in faults: time the plug was switched off is left out, and so are pauses far longer
+than the rest (a day unplugged).
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
-from .episodes import IDLE, RUN, Segment, segment_all
+from .episodes import IDLE, RUN, segment_all
 
 MAX_HOLD_S = 3600.0  # a reading weighs at most this long (sparse plugs, restarts)
-# A run or pause longer than this many times the 95th percentile is not normal: a
-# stall or a day unplugged. Anything tighter cuts the long tail some fridges really have
+# A pause longer than this many times the 95th percentile is not normal: a day
+# unplugged. Anything tighter cuts the long tail some fridges really have
 # (LG fridge: p95 79 min, longest 165 min).
 OUTLIER_P95 = 3.0
 
@@ -26,11 +26,8 @@ class Model:
     run_w: float  # typical running level (time-weighted median above the threshold)
     threshold_w: float
     runs: int
-    max_run_s: float
-    p99_run_s: float
     max_pause_s: float
     p99_pause_s: float
-    pause_level_p90: float  # what the device draws between runs, p90 over pauses
 
 
 def weighted_percentile(pairs: list[tuple[float, float]], q: float) -> float:
@@ -144,9 +141,8 @@ def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = 20
     run_w = weighted_percentile([p for p in pairs if p[0] >= threshold], 50)
 
     segs = [s for s in segment_all(readings, threshold) if s.complete]
-    runs = typical([s.known_s for s in segs if s.state == RUN])
+    runs = [s.known_s for s in segs if s.state == RUN]
     pauses = typical([s.known_s for s in segs if s.state == IDLE])
-    levels = [segment_level(s) for s in segs if s.state == IDLE and s.known_s >= 300]
     if len(runs) < min_runs or not pauses:
         raise NotCyclingError(f"only {len(runs)} complete runs")
     return Model(
@@ -154,24 +150,14 @@ def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = 20
         run_w=run_w,
         threshold_w=threshold,
         runs=len(runs),
-        max_run_s=max(runs),
-        p99_run_s=percentile(runs, 99),
         max_pause_s=max(pauses),
         p99_pause_s=percentile(pauses, 99),
-        pause_level_p90=percentile(levels, 90) if levels else lo,
     )
 
 
 def suggest_profile(readings: list[tuple[float, float | None]]) -> str:
     """'cycling', 'always_on' or 'on_demand', from history. Only a suggestion."""
     return summarize(readings).profile
-
-
-def segment_level(s: Segment) -> float:
-    """Time-weighted median power of a closed segment."""
-    ends = [t for t, _ in s.samples[1:]] + [s.end]
-    return weighted_percentile(
-        [(w, max(e - t, 0.001)) for (t, w), e in zip(s.samples, ends, strict=True)], 50)
 
 
 def _held(readings: list[tuple[float, float | None]]) -> float:
