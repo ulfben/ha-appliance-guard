@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from math import log1p
 
 from .episodes import IDLE, RUN, segment_all
 
@@ -85,22 +86,37 @@ def time_weighted(readings: list[tuple[float, float | None]]) -> list[tuple[floa
 
 
 def two_levels(pairs: list[tuple[float, float]]) -> tuple[float, float]:
-    """Time-weighted 2-means on values up to the p99 (start surges excluded)."""
+    """Idle and running level: time-weighted 2-means on values up to the p99.
+
+    Split on a log scale. In watts, a load that runs most of the time with a wide
+    running range (a freezer: 1.4 W idle, 33-90 W running, running 85 % of the time)
+    pulls the split into its running range. On a log scale idle and running are far
+    apart and the running range is narrow. The levels returned are means in watts.
+    """
     cap = weighted_percentile(pairs, 99)
-    pairs = [p for p in pairs if p[0] <= cap]
-    lo, hi = weighted_percentile(pairs, 5), weighted_percentile(pairs, 95)
+    pairs = [(log1p(max(v, 0.0)), w, v) for v, w in pairs if v <= cap]
+    lo = weighted_percentile([(x, w) for x, w, _ in pairs], 5)
+    hi = weighted_percentile([(x, w) for x, w, _ in pairs], 95)
+    a, b = pairs, []
     for _ in range(50):
         mid = (lo + hi) / 2
-        a = [(v, w) for v, w in pairs if v < mid]
-        b = [(v, w) for v, w in pairs if v >= mid]
+        a = [p for p in pairs if p[0] < mid]
+        b = [p for p in pairs if p[0] >= mid]
         if not a or not b:
             break
-        nlo = sum(v * w for v, w in a) / sum(w for _, w in a)
-        nhi = sum(v * w for v, w in b) / sum(w for _, w in b)
-        if abs(nlo - lo) < 0.01 and abs(nhi - hi) < 0.01:
+        nlo = sum(x * w for x, w, _ in a) / sum(w for _, w, _ in a)
+        nhi = sum(x * w for x, w, _ in b) / sum(w for _, w, _ in b)
+        if abs(nlo - lo) < 1e-4 and abs(nhi - hi) < 1e-4:
             break
         lo, hi = nlo, nhi
-    return lo, hi
+    if not a or not b:
+        v = sum(v * w for _, w, v in pairs) / sum(w for _, w, _ in pairs)
+        return v, v
+
+    def mean_w(group: list[tuple[float, float, float]]) -> float:
+        return sum(v * w for _, w, v in group) / sum(w for _, w, _ in group)
+
+    return mean_w(a), mean_w(b)
 
 
 class NotCyclingError(ValueError):

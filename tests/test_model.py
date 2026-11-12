@@ -79,3 +79,22 @@ def test_without_turns_the_gaps_into_unknown_time():
     readings = [(0.0, 1.0), (10.0, 2.0), (20.0, 3.0), (30.0, 4.0)]
     assert without(readings, [(5.0, 25.0)]) == [(0.0, 1.0), (5.0, None), (30.0, 4.0)]
     assert without(readings, [(40.0, 50.0)])[-1] == (40.0, None)
+
+
+def test_a_load_that_mostly_runs_over_a_wide_range_still_has_an_idle_level():
+    """The LG freezer: idle 1.4 W, running 85 % of the time at 33-90 W.
+
+    Split in watts, the running range was split in two (31 / 86 W) and the
+    freezer was never learned. On a log scale idle and running are far apart.
+    """
+    readings: list[tuple[float, float | None]] = []
+    t = 0.0
+    for _ in range(100):
+        for i in range(120):
+            readings.append((t + i * 60, 85.0 + i % 3 if i < 30 else 33.0 + i % 10))
+        t += 120 * 60
+        readings.append((t, 1.4))
+        t += 20 * 60
+    m = learn_cycling(readings)
+    assert m.idle_w < 2 and 30 < m.run_w < 90 and m.threshold_w < 33
+    assert 19 * 60 <= m.max_pause_s <= 21 * 60

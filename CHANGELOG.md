@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.11.5
+
+- Fridges and freezers that run most of the time over a wide power range (an LG
+  freezer at 33-90 W) are learned again: idle and running are now told apart on a
+  log scale.
+
 ## 2026.11.4
 
 - Open alerts, what was already reported, snooze and Keep powered's state
