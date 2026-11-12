@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.4
 
 - Open alerts, what was already reported, snooze and Keep powered's state
   survive restarts and reloads. A problem still going on that nobody was told
