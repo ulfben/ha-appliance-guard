@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.6
 
 - Setup only calls a plug cycling when it has the 20 complete runs needed to
   learn it, not 10.
