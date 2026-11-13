@@ -19,6 +19,8 @@ MAX_HOLD_S = 3600.0  # a reading weighs at most this long (sparse plugs, restart
 # unplugged. Anything tighter cuts the long tail some fridges really have
 # (LG fridge: p95 79 min, longest 165 min).
 OUTLIER_P95 = 3.0
+# Complete runs needed to learn a cycling appliance, at setup and afterwards.
+MIN_RUNS = 20
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,7 @@ def learn_floor(readings: list[tuple[float, float | None]]) -> float:
     return floor
 
 
-def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = 20) -> Model:
+def learn_cycling(readings: list[tuple[float, float | None]], min_runs: int = MIN_RUNS) -> Model:
     pairs = time_weighted(readings)
     if not pairs:
         raise NotCyclingError("no readings")
@@ -252,7 +254,7 @@ def summarize(readings: list[tuple[float, float | None]], rating_w: float | None
     now = known[-1][0] if now is None else now
     profile, parts = "on_demand", []
     try:
-        m = learn_cycling(readings, min_runs=10)
+        m = learn_cycling(readings)  # the same bar as the integration's
         if m.runs / days >= CYCLING_MIN_STARTS_PER_DAY and m.p99_pause_s <= CYCLING_MAX_PAUSE_S:
             profile = "cycling"
             parts.append(f"cycles like a compressor: ~{m.run_w:.0f} W, "

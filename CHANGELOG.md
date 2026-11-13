@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Setup only calls a plug cycling when it has the 20 complete runs needed to
+  learn it, not 10.
+
 ## 2026.11.5
 
 - Fridges and freezers that run most of the time over a wide power range (an LG

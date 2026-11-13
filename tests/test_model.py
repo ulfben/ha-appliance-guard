@@ -98,3 +98,18 @@ def test_a_load_that_mostly_runs_over_a_wide_range_still_has_an_idle_level():
     m = learn_cycling(readings)
     assert m.idle_w < 2 and 30 < m.run_w < 90 and m.threshold_w < 33
     assert 19 * 60 <= m.max_pause_s <= 21 * 60
+
+
+def test_setup_only_calls_it_cycling_when_it_can_be_learned():
+    """15 runs in 2.5 days cycles like a compressor, but too few runs to learn yet."""
+    from custom_components.appliance_guard.model import summarize
+
+    readings: list[tuple[float, float | None]] = []
+    for i in range(15):
+        t = i * 4 * 3600
+        readings += [(t, 90.0), (t + 1200, 1.0)]
+    readings.append((15 * 4 * 3600, 1.0))
+    assert summarize(readings).profile == "on_demand"
+    readings += [(15 * 4 * 3600 + i * 4 * 3600 + d, w) for i in range(6)
+                 for d, w in ((600, 90.0), (1800, 1.0))]
+    assert summarize(readings).profile == "cycling"
