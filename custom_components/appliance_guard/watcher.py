@@ -28,6 +28,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     ACTION_PREFIX,
+    ALARM_REPEAT_LATER_S,
     ALARM_REPEAT_S,
     ALARM_REPEATS,
     COMMAND_WINDOW_S,
@@ -568,7 +569,8 @@ class Watcher:
 
     async def async_respond(self, fid: str, response: str) -> None:
         f = self.findings.pop(fid, None)
-        self._sent.pop(fid, None)
+        if self._sent.pop(fid, None) is not None:
+            self._clear_phone(fid)  # answered here or on another phone
         ir.async_delete_issue(self.hass, DOMAIN, self.issue_id(fid))
         now = time.time()
         if f is not None and f.data.get("kept_on") is False:
@@ -653,10 +655,17 @@ class Watcher:
         for target in self.notify_targets:
             self.hass.async_create_task(self._async_notify(target, title, f.summary, data))
 
-    async def _async_notify(self, target: str, title: str, message: str, data: dict) -> None:
+    def _clear_phone(self, fid: str) -> None:
+        for target in self.notify_targets:
+            self.hass.async_create_task(self._async_notify(
+                target, None, "clear_notification", {"tag": self.issue_id(fid)}))
+
+    async def _async_notify(self, target: str, title: str | None, message: str,
+                            data: dict) -> None:
         try:
             await self.hass.services.async_call(
-                "notify", target, {"title": title, "message": message, "data": data},
+                "notify", target,
+                {"message": message, "data": data} | ({"title": title} if title else {}),
                 blocking=True)
         except Exception:  # noqa: BLE001 - a missing phone must not break detection
             _LOGGER.warning("Could not notify %s", target, exc_info=True)
@@ -666,8 +675,9 @@ class Watcher:
             if f.severity != Severity.ALARM or fid not in self._sent:
                 continue
             last, times = self._sent[fid]
-            if times <= ALARM_REPEATS and now - last >= ALARM_REPEAT_S:
-                self._send_phone(fid, f)
+            every = ALARM_REPEAT_S if times <= ALARM_REPEATS else ALARM_REPEAT_LATER_S
+            if now - last >= every:
+                self._send_phone(fid, f)  # until it is answered
 
     @callback
     def _on_phone_action(self, event: Event) -> None:

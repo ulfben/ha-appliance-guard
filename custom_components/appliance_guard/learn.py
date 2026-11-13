@@ -15,14 +15,15 @@ _LOGGER = logging.getLogger(__name__)
 Reading = tuple[float, float | None]
 
 
-def to_watts(state: State | None) -> float | None:
+def to_watts(state: State | None, unit: str | None = None) -> float | None:
+    """The reading in W. `unit` overrides the state's own (history is read without)."""
     if state is None:
         return None
     try:
         value = float(state.state)
     except (TypeError, ValueError):
         return None  # unavailable, unknown, or not a number
-    unit = state.attributes.get("unit_of_measurement")
+    unit = unit or state.attributes.get("unit_of_measurement")
     return value * 1000 if unit == "kW" else value
 
 
@@ -37,7 +38,9 @@ async def async_load_readings(hass: HomeAssistant, entity_id: str, days: float) 
     rec = get_instance(hass)
     states = await rec.async_add_executor_job(_states, hass, entity_id, start, end)
     stops = await rec.async_add_executor_job(_stops, hass, start)
-    readings: list[Reading] = [(s.last_updated_timestamp, to_watts(s)) for s in states]
+    now = hass.states.get(entity_id)
+    unit = now.attributes.get("unit_of_measurement") if now else None
+    readings: list[Reading] = [(s.last_updated_timestamp, to_watts(s, unit)) for s in states]
     readings += [(t, None) for t in stops]
     readings.sort(key=lambda r: r[0])
     return readings
@@ -56,7 +59,7 @@ async def async_load_relay(hass: HomeAssistant, entity_id: str,
 
 def _states(hass: HomeAssistant, entity_id: str, start: datetime, end: datetime) -> list[State]:
     found = history.state_changes_during_period(
-        hass, start, end, entity_id, no_attributes=False, include_start_time_state=True)
+        hass, start, end, entity_id, no_attributes=True, include_start_time_state=True)
     return found.get(entity_id, [])
 
 

@@ -546,7 +546,7 @@ async def test_an_answered_alarm_is_not_raised_again_after_a_reload(
 
     await _reload(hass, entry)
     assert _issues(hass) == []
-    assert len(notify) == 1
+    assert [c.data["message"] for c in notify][1:] == ["clear_notification"]  # no new alarm
 
 
 async def test_ha_stopping_saves_what_was_raised(
@@ -806,3 +806,59 @@ async def test_off_on_purpose_ends_for_a_tiny_always_on_load(hass: HomeAssistant
     hass.states.async_set(POWER, "3.1")
     await hass.async_block_till_done()
     assert w.mode == "watching"
+
+
+# ---- phone: repeats until answered, cleared when answered -------------------------
+
+async def test_an_unanswered_alarm_keeps_coming_then_is_cleared(
+        hass: HomeAssistant, setup, freezer):
+    entry, notify = setup
+    hass.states.async_set(POWER, "3302")
+    await hass.async_block_till_done()
+    for _ in range(4):  # the first hour: every 15 min
+        await _tick_later(hass, freezer, 15 * 60)
+    assert len(notify) == 5
+    await _tick_later(hass, freezer, 30 * 60)
+    assert len(notify) == 5  # then hourly
+    await _tick_later(hass, freezer, 31 * 60)
+    await _tick_later(hass, freezer, 60 * 60)
+    assert len(notify) == 7  # and it doesn't stop by itself
+
+    fid = next(iter(entry.runtime_data.findings))
+    tag = notify[0].data["data"]["tag"]
+    await entry.runtime_data.async_respond(fid, "will_check")
+    await hass.async_block_till_done()
+    assert notify[-1].data == {"message": "clear_notification", "data": {"tag": tag}}
+    await _tick_later(hass, freezer, 2 * 3600)
+    assert len(notify) == 8  # nothing after the answer
+
+
+@pytest.mark.parametrize(("entity_id", "relay"), [
+    ("switch.plug_controlled_outlet", True),
+    ("switch.plug_scheduled", True),
+    ("switch.plug", True),
+    ("switch.plug_led", False),
+    ("switch.plug_child_lock", False),
+    ("switch.plug_power_outage_memory", False),
+    ("switch.plug_led_indicator", False),
+])
+def test_setup_tells_relays_from_plug_settings(entity_id, relay):
+    from custom_components.appliance_guard.config_flow import _NOT_RELAY
+
+    assert (not _NOT_RELAY.search(entity_id)) is relay
+
+
+async def test_history_is_read_in_watts_without_attributes(hass: HomeAssistant):
+    from homeassistant.components.recorder import get_instance
+    from pytest_homeassistant_custom_component.components.recorder.common import (
+        async_wait_recording_done,
+    )
+
+    from custom_components.appliance_guard.learn import async_load_readings
+
+    for v in ("0.09", "1.2"):
+        hass.states.async_set(POWER, v, {"device_class": "power", "unit_of_measurement": "kW"})
+        await async_wait_recording_done(hass)
+    assert get_instance(hass) is not None
+    readings = await async_load_readings(hass, POWER, 1)
+    assert [w for _, w in readings if w is not None][-2:] == [90.0, 1200.0]

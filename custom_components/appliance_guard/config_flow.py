@@ -42,7 +42,8 @@ from .model import PlugSummary, summarize
 
 PROFILES = ["cycling", "always_on", "on_demand"]
 CONF_PLUGS = "plugs"
-_NOT_RELAY = re.compile(r"child_lock|led|outage|lock|indicator|backlight")
+# Whole words of the entity id only: "led" must not match "controlled" or "scheduled".
+_NOT_RELAY = re.compile(r"(?:^|[._])(?:child_lock|led|outage|lock|indicator|backlight)(?:$|_)")
 
 
 def _relays(ent_reg: er.EntityRegistry, device_id: str) -> list[str]:

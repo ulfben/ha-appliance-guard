@@ -252,7 +252,8 @@ opens Repairs.
 | One-off / I'll check | Closes the finding. The same episode stays quiet |
 | Snooze 1 h / 24 h | Only safety alarms come through for that long |
 
-An alarm repeats on the phone every 15 min until answered, up to 5 sends.
+An unanswered alarm is sent again every 15 min for the first hour, then hourly,
+until it is answered. Answering it anywhere clears it from every phone.
 
 **Paused and Disabled** are modes the user sets on purpose, and they don't
 expire. The status sensor's `checks` attribute lists every check that applies

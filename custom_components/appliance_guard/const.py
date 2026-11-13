@@ -16,8 +16,10 @@ HISTORY_DAYS = 10
 TICK_S = 60
 REPLAY_HOURS = 12  # history replayed silently at start, so open runs/pauses are known
 COMMAND_WINDOW_S = 10  # a relay change this soon after a matching service call was commanded
+# An unanswered alarm is sent again: every 15 min for the first hour, then hourly.
 ALARM_REPEAT_S = 15 * 60
 ALARM_REPEATS = 4
+ALARM_REPEAT_LATER_S = 60 * 60
 OFF_ON_PURPOSE_RUNS = 5  # normal runs that end "off on purpose" for a cycling device
 # Keep powered: turn the relay back on by itself, at most this often, and never
 # right after it was over its rating (that is the plug protecting itself).

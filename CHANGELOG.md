@@ -4,6 +4,12 @@
 
 - Setup only calls a plug cycling when it has the 20 complete runs needed to
   learn it, not 10.
+- An unanswered alarm keeps coming until it is answered: every 15 min for the
+  first hour, then hourly.
+- Answering an alert clears its notification from every phone.
+- Setup no longer skips relays whose names contain "led" or "lock" inside a word
+  ("controlled", "scheduled").
+- History is read without state attributes.
 
 ## 2026.11.5
 
