@@ -1,4 +1,4 @@
-"""Reference cases R1-R12 (docs/DESIGN.md section 2) replayed through the detector."""
+"""Real cases from the reference install (docs/DESIGN.md, section 3), replayed."""
 
 import random
 from dataclasses import replace

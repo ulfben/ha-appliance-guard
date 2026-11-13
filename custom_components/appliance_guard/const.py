@@ -39,7 +39,7 @@ MODE_PAUSED = "paused"
 MODE_DISABLED = "disabled"
 MODES = [MODE_WATCHING, MODE_OFF_ON_PURPOSE, MODE_PAUSED, MODE_DISABLED]
 
-# Responses (DESIGN.md section 7). The fix flow and phone buttons use these ids.
+# Answers (docs/DESIGN.md section 8). The fix flow and phone buttons use these ids.
 R_OFF_ON_PURPOSE = "off_on_purpose"
 R_SOMETHING_NEW = "something_new"
 R_ONE_OFF = "one_off"
